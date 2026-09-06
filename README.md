@@ -27,7 +27,7 @@ Stack: Python 3.13, `pymc` 6.2.0, `pymc-marketing` 1.1.0, `arviz`, `pandas`/`num
 | 7. External calibration (stretch) | ⬜ Not started. |
 | 8. ROAS + budget optimization under uncertainty | ⬜ Not started. Must run on the **national** model -- the geo panel has impressions, not dollars, so no ROAS exists there. |
 | 9. Ridge vs. Bayesian comparison | ⬜ Not started. |
-| 10. Self-audit | 🟡 A mid-flight end-to-end audit of Phases 1-5 is done -- `docs/AUDIT.md`. All 24 documented figures reproduce exactly; one real defect (silent wrong answers on panel fits) and three gaps found and fixed. The full-project self-audit this phase names is still to come. |
+| 10. Self-audit | 🟡 A mid-flight end-to-end audit of Phases 1-5 is done -- `docs/AUDIT.md`. All 24 documented figures reproduce exactly, and none of the findings invalidated a conclusion. Nine defects and gaps found, all nine fixed. The full-project self-audit this phase names is still to come. |
 | 11. Dashboard + docs | ⬜ Not started. |
 
 ## Real findings so far (see `docs/CHALLENGES.md` for full detail)
@@ -195,10 +195,7 @@ it via the ridge project's own `scripts/fetch_data.py` first.
   been run long enough to clear R-hat on a machine that can hold a 1000-draw fit.
 - The likelihood-noise prior is still an untouched library default. The intercept prior
   was the other one, and reviewing it in Phase 5 found a real defect.
-- **No version control.** Five phases and ~5,100 lines with no git history: nothing can
-  be bisected, reverted, or dated. `docs/AUDIT.md` rates this the single largest risk to
-  the project.
-- The cached fits are 1.3 GB (`data/derived/fits/`, gitignored), almost all of it
-  per-observation deterministics the diagnostics never read.
+- Version control starts at the Phase 5 audit. Everything before it exists only as prose
+  in `docs/CHALLENGES.md` -- no commit can be bisected or dated earlier than that.
 - Everything from Phase 6 onward is unbuilt. This is a working core with five real,
   verified phases -- not a finished project.

@@ -7,11 +7,16 @@ whether they can actually fail, and documents checked against the fits they desc
 This is not Phase 10's self-audit — that one is scoped to the finished project. This is a
 mid-flight check before Phase 6 starts building on top of five phases of assumptions.
 
-**Verdict: the documented numbers hold up, and the code has one real defect plus three
-gaps.** Every diagnostic figure in `DIAGNOSTICS.md` reproduces exactly. One function
-returns confidently wrong answers on an input nothing currently gives it. Four
-dependencies were relied on without being declared. Two load-bearing invariants had no
-test.
+**Verdict: the documented numbers hold up. The code had nine defects and gaps; all nine
+are fixed.** Every diagnostic figure in `DIAGNOSTICS.md` reproduces exactly, as do Phase
+1's headline claims and the data-integrity chain. Against that, two functions returned
+confidently wrong numbers on inputs nothing currently gave them, four dependencies were
+relied on without being declared, two load-bearing invariants had no test, a cached fit
+could not be rewritten in place, and the project had no version history.
+
+Nothing found invalidates a conclusion in `DIAGNOSTICS.md`, `HIERARCHY.md` or
+`PRIORS.md`. The defects were in code paths the findings did not travel through — which
+is its own lesson about where bugs accumulate.
 
 ---
 
@@ -107,9 +112,46 @@ untested; the latter two are now covered.
 
 ---
 
-## Findings not fixed
+### 5. HIGH — `diagnostics.contribution_intervals` was an orphaned trap *(fixed: removed)*
 
-### 5. HIGH — this is not a git repository
+Never called by anything but its own tests, and it returned per-channel totals in
+**max-scaled target units** — the exact error the sibling module's docstring warns about.
+For `dm` it returned `11.094` where the true share of sales is `17.27%`: off by 64.2x,
+and shaped like a percentage. Two tests exercised it as though it were a deliverable.
+
+Removed rather than fixed, because `attribution.channel_shares` already does the job on
+the sales scale and reconciles against observed sales. A second, wrong way to compute the
+project's headline number is worse than no second way.
+
+### 6. MEDIUM — rewriting a cached fit in place was impossible *(fixed)*
+
+`save_idata(load_idata(p), p)` failed. `az.from_netcdf` is lazy, so the returned object
+holds the file open; the write raised *"unable to truncate a file which is already
+open"*, and an atomic temp-file-then-replace then failed with `PermissionError` because
+Windows will not replace a held file either. Found while trying to slim the geo cache.
+
+Fixed on both sides: `load_idata` now calls `.load()` **and** `.close()` — both are
+needed, since xarray keeps opened files in a global cache that `.load()` alone does not
+clear — and `save_idata` writes via a temp file and replaces, so a crash mid-write cannot
+destroy the previous good fit.
+
+### 7. LOW — `run_geo_fit` mislabelled caller-supplied models *(fixed)*
+
+The result dict reported `pooled=True` regardless of whether the caller passed its own
+model. The decay-pooling sensitivity check passes one that pools adstock *differently*,
+so the label was attaching this function's description to someone else's model. Now
+reports `None` when a model is supplied, with a test.
+
+### 8. MEDIUM — the geo cache was 1.11 GB *(fixed: 79 MB)*
+
+Almost all of it was per-observation deterministics that nothing reads back: the
+diagnostics use parameters only, and `attribution` refuses panel fits outright.
+`save_idata` gained a `drop_derived` flag, and `run_full_fits` sets it for the geo model
+and not for the national one, whose contributions are the deliverable. **1,113 MB → 79 MB,
+92.9% smaller, with the diagnostic report bit-identical before and after.** Total cache
+footprint is now 275 MB rather than 1.3 GB.
+
+### 9. HIGH — this was not a git repository *(fixed)*
 
 Five phases, roughly 5,100 lines of source, tests and documentation, and **no version
 history**. There is no way to bisect a regression, revert a bad decision, or see when a
@@ -124,23 +166,17 @@ Two specific risks this creates:
 * `data/derived/ridge_anchors.json` is a committed-by-intent artefact with a data hash.
   Nothing enforces that it and the code that reads it move together.
 
-Not fixed because initialising a repository and choosing what the first commit contains
-is the owner's decision, not an auditor's. It is the single largest risk to the project.
+**Fixed.** Initialised, with a `.gitattributes` pinning LF endings so the tree does not
+show as wholly modified on a machine with different `autocrlf` settings, and one initial
+commit of 41 files / 0.37 MB. Verified before committing that no cached fit, no virtual
+environment and no non-redistributable geo data is tracked.
 
-### 6. MEDIUM — 1.3 GB of cached fits
+The history before this point is unrecoverable and exists only as prose in
+`docs/CHALLENGES.md`. That is the cost of the finding, and it is already paid.
 
-`data/derived/fits/geo_pooled.nc` is **1.11 GB**; `national_anchored.nc` is 196 MB.
-`.gitignore` excludes the directory, so this is a disk-footprint issue rather than a
-repository one, but it is worth knowing before a third model is cached.
+## Findings accepted, not fixed
 
-Almost all of the geo file is the per-observation deterministics —
-`channel_contribution` and `control_contribution` at (2,000 draws × 113 dates × 26 geos ×
-channels). The diagnostics that justify caching the fit use none of it. Saving a slimmed
-copy for diagnostics and the full one only when contributions are needed would cut this
-by an order of magnitude. Not done because it changes what downstream phases can read
-back, which is a design decision.
-
-### 7. LOW — eight tests skip silently on a fresh clone
+### 10. LOW — eight tests skip silently on a fresh clone
 
 `tests/test_attribution.py` is guarded by `skipif` on the cached national fit existing.
 Without it, eight tests — including the reconciliation invariant and the identification
@@ -148,10 +184,12 @@ finding — do not run. pytest does report the skip count, so this is visible to
 of the output rather than hidden, but a fresh clone's green `pytest` covers materially
 less than it appears to.
 
-### 8. LOW — `scipy` is declared as a runtime dependency and used only in tests
+### 11. LOW — `scipy` is declared as a runtime dependency and used only in tests
 
-Harmless (it arrives transitively regardless) but the declaration is inaccurate. It
-belongs in the `dev` extra.
+`src/` never imports it; the tests do. Left declared: pymc requires scipy regardless, so
+the declaration is redundant rather than wrong, and moving it to the `dev` extra would
+make a fresh `pip install -e .` depend on a transitive edge staying put — the exact
+fragility finding 2 was about.
 
 ---
 
@@ -173,12 +211,11 @@ Not everything questionable is wrong. Three things looked like defects and are n
 
 ## Open before Phase 6
 
-1. Initialise version control. (finding 5)
-2. Decide whether `attribution` should support panel fits, or whether the geo model gets
+1. Decide whether `attribution` should support panel fits, or whether the geo model gets
    its own decomposition module. Phase 6 calibrates the geo model, so this will come up.
-3. The `link="log"` item from `HIERARCHY.md` remains untouched — the geo model's Gaussian
+2. The `link="log"` item from `HIERARCHY.md` remains untouched — the geo model's Gaussian
    identity link puts 4.9% of its prior predictive on impossible negative sales.
-4. The likelihood-noise prior on the national model is still an untouched library
+3. The likelihood-noise prior on the national model is still an untouched library
    default; `PRIORS.md` describes it as "not yet reviewed", which is accurate.
 
 ## Reproducing this audit
@@ -187,7 +224,7 @@ Every check above is a short script over the cached fits and the two repos; the
 non-obvious ones are now tests:
 
 ```bash
-pytest                                   # 96 fast, includes the new guards
-pytest -m slow                           # 12, includes the ridge-refit equality check
+pytest                                   # 95 fast, includes the new guards
+pytest -m slow                           # 13, includes the ridge-refit equality check
 python scripts/report_contributions.py   # regenerates the verified figures
 ```
