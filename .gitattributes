@@ -1,0 +1,6 @@
+# The project writes source and docs with LF explicitly; without this, git's
+# autocrlf on Windows rewrites them to CRLF on checkout and every file shows as
+# modified on a machine with different settings.
+* text=auto eol=lf
+*.csv text eol=lf
+*.nc binary

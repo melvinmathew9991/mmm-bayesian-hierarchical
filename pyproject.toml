@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bayesian-mmm-pymc"
+version = "0.1.0"
+description = "Hierarchical Bayesian Marketing Mix Model (pymc-marketing), calibrated against an independently placebo-tested geo-DiD estimator from the ridge-regression MMM project"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "pymc>=5.10",
+    "pymc-marketing>=0.7",
+    "arviz>=0.17",
+    # Imported directly by mmm_bayes.priors / geo_model / diagnostics, not merely
+    # pulled in by pymc-marketing. Declared explicitly after an audit found the code
+    # relying on them arriving transitively -- a pymc-marketing release that dropped
+    # either one would break this project with an ImportError and no clue why.
+    "pymc-extras>=0.14",
+    "xarray>=2024.1",
+    # Needed by diagnostics.save_idata / load_idata. Without these `pip install -e .`
+    # yields a project whose Phase 5 caching fails at runtime rather than at install.
+    "h5netcdf>=1.3",
+    "h5py>=3.10",
+    # mmm-marketing-project (the ridge project, package name `mmm`) is a required
+    # sibling dependency, not published to PyPI. Install it first from its own repo:
+    #   pip install -e ../mmm-marketing-project
+    # Left out of this list because a relative file:// path here breaks for anyone
+    # who clones this repo without the ridge project checked out at that exact
+    # relative location.
+]
+
+[project.optional-dependencies]
+app = ["streamlit>=1.30"]
+dev = ["pytest>=7.4", "ruff>=0.4"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -m 'not slow'"
+markers = [
+    "slow: MCMC-sampling tests, excluded by default (run with -m slow)",
+]
+
+[tool.ruff]
+# 110 rather than 88/100, matching the ridge project: the widest lines here are single
+# logical units -- a Prior construction, an f-string printing one diagnostic line --
+# that read worse broken across lines than left intact.
+line-length = 110
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

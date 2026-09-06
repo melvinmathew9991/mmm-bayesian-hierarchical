@@ -1,0 +1,74 @@
+{
+  "generated": "2026-09-06 08:27:38 UTC",
+  "source": "mmm_bayes.baseline_replication.replicate_ridge_baseline -- the ridge project's own run_mmm, refit in this repo on this repo's copy of the data",
+  "national_csv_md5": "fc003779f05e12cbd4b633451167c61d",
+  "n_weeks": 209,
+  "week_range": [
+    "2014-08-03",
+    "2018-07-29"
+  ],
+  "alpha": 10.0,
+  "r2_in_sample": 0.6712462603172107,
+  "channels": {
+    "dm": {
+      "decay": 0.8,
+      "half_point": 3710972.858971342,
+      "ridge_coef": 1694185.76358391,
+      "ridge_contribution": 174457206.2522549
+    },
+    "inst": {
+      "decay": 0.2,
+      "half_point": 163655.93538613798,
+      "ridge_coef": 5461262.905372249,
+      "ridge_contribution": 391854542.26190865
+    },
+    "nsp": {
+      "decay": 0.4,
+      "half_point": 498572.29819094524,
+      "ridge_coef": 1.3619216445226039e-11,
+      "ridge_contribution": 1.0004704445787274e-09
+    },
+    "auddig": {
+      "decay": 0.8,
+      "half_point": 33624.73082251498,
+      "ridge_coef": 1070069.5910315085,
+      "ridge_contribution": 77884454.8001908
+    },
+    "audtr": {
+      "decay": 0.4,
+      "half_point": 397772.0355068248,
+      "ridge_coef": 1.525670149133885e-07,
+      "ridge_contribution": 1.048102123403161e-05
+    },
+    "vidtr": {
+      "decay": 0.0,
+      "half_point": 56176.585,
+      "ridge_coef": 7017971.219478646,
+      "ridge_contribution": 927981418.9214758
+    },
+    "viddig": {
+      "decay": 0.2,
+      "half_point": 8908.55622994412,
+      "ridge_coef": 6648880.821963966,
+      "ridge_contribution": 881532315.778882
+    },
+    "so": {
+      "decay": 0.8,
+      "half_point": 231498.65066303677,
+      "ridge_coef": 1250130.4118919938,
+      "ridge_contribution": 152484289.9045506
+    },
+    "on": {
+      "decay": 0.8,
+      "half_point": 1934121.095314427,
+      "ridge_coef": 1242368.4491838163,
+      "ridge_contribution": 89027028.45063275
+    },
+    "sem": {
+      "decay": 0.8,
+      "half_point": 5516488.079646669,
+      "ridge_coef": 1618880.8874823123,
+      "ridge_contribution": 115608907.42550379
+    }
+  }
+}
