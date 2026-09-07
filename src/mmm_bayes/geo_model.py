@@ -61,9 +61,10 @@ import sys
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 from pymc_extras.prior import Prior
 from pymc_marketing.mmm import MMM, GeometricAdstock, InverseScaledLogisticSaturation
-from pymc_marketing.mmm.scaling import DataDerivedScaling, Scaling
+from pymc_marketing.mmm.scaling import DataDerivedScaling, FixedScaling, Scaling
 
 from mmm_bayes.geo_features import PEAK_WEEK_COLS, build_geo_controls
 from mmm_bayes.loaders import GEO_CHANNELS, GEO_DIM, load_geo
@@ -194,7 +195,100 @@ def _hierarchical_positive(location: float, location_sigma: float,
     )
 
 
-def build_geo_model(pooled: bool = True) -> MMM:
+CHANNEL_SCALING_MODES = ("per-channel", "target-relative")
+
+
+def target_relative_channel_scaling(X: pd.DataFrame, y: pd.Series) -> xr.DataArray:
+    """Per-(geo, channel) channel divisors that PRESERVE the cross-division media
+    intensity contrast, as `max_y[geo] * k[channel]`.
+
+    WHY THIS EXISTS -- the default scaling destroys the only variation a DiD could use.
+    ------------------------------------------------------------------------------
+    `DataDerivedScaling(method="max", dims=())` divides each channel by *its own* per-geo
+    maximum, and the target by *its own* per-geo maximum. Both divisors are then
+    per-division constants, so what the model sees is
+
+        x_scaled / y_scaled = (x / max_x[g, c]) / (y / max_y[g])
+
+    and the media-to-sales ratio -- how heavily a division is media-supported, which is
+    exactly the cross-sectional contrast Phase 6 wants -- is divided straight out. What
+    survives is only the within-geo shape over time, which is the same information the
+    national model already has, replicated 26 times rather than added to.
+
+    Measured on this panel, that is not a small effect. Raw media-per-sales spans 11.17x
+    across divisions (CV 0.271) and is close to orthogonal to division size
+    (corr(log sales, log intensity) = 0.155) -- near-ideal identifying variation. After
+    the default scaling the model sees a span of 1.79x, and worse, an INVERTED one:
+    corr(raw intensity, scaled intensity) = -0.457. Division C has the lowest raw
+    intensity and the highest scaled one.
+
+    The sharpest case is Google_Impressions. Divisions C and N run 50,708 and 55,527
+    impressions against division B's 458,607,393 -- a ~9,000x gap, and genuine rather
+    than a zero artefact (no division-channel pair has a single zero week). Dividing C's
+    Google by C's own maximum inflates it to the full [0, 1] range, so the model cannot
+    tell "this division does not run Google" from "this division saturates it".
+
+    WHAT THIS COMPUTES
+    ------------------
+    Scale channel `c` in division `g` by `max_y[g] * k[c]`, where `k[c]` is a single
+    constant shared across divisions:
+
+        k[c] = median_g( max_t x[g, c] / max_y[g] )
+
+    Because `k` does not vary by geo, the cross-division contrast passes through intact;
+    because the divisor is proportional to `max_y[g]`, the media-to-sales ratio is
+    preserved up to that per-channel constant. `k` is a median rather than a mean so the
+    two Google outliers set none of it.
+
+    The per-channel constant is what keeps the existing priors valid. Scaling by
+    `max_y[g]` alone leaves the six channels spanning three orders of magnitude
+    (Paid_Views median 0.006 against Google_Impressions median 0.912, max 12.0), which
+    the `saturation_lam` prior centred at 0.3 does not describe. With `k[c]` the typical
+    division's channel maximum lands at ~1.0 -- the same place the default scaling put
+    it -- so `hierarchical_config`'s prior calibration carries over unchanged, while the
+    divisions that genuinely differ move off it (C's Google maximum sits at 0.001, N's at
+    0.000). Recovered contrast: span 7.00x, corr(raw, scaled) = +0.865.
+
+    Returns a `(geo, channel)` DataArray with labelled coordinates, for
+    `FixedScaling(dims=(), value=...)`.
+
+    THE ROW ORDER IS LOAD-BEARING. `FixedScaling` aligns the supplied array to the data
+    grid **positionally, not by label**, despite the array carrying coordinate labels and
+    despite `MMM._align_fixed_scale_dataarray` being written as an xarray broadcast that
+    looks like it would align. Measured: feeding this same array with its 26 divisions
+    reversed changes the applied divisors by up to 1.99e7 and raises no error -- every
+    division would be scaled by another division's maximum, silently. See
+    docs/CHALLENGES.md #14.
+
+    What makes the order right here is that `groupby(GEO_DIM)` sorts the divisions
+    alphabetically and pymc-marketing's own pivot does too, and that the channel columns
+    are selected as `GEO_CHANNELS`, which is the order the pivot keeps (it is NOT
+    alphabetical). Both facts are luck rather than contract, so
+    `tests/test_geo_model.py::test_target_relative_scaling_matches_the_model_coord_order`
+    asserts them, and a companion test pins the positional behaviour itself so that a
+    future library fix to label alignment is detected rather than silently relied on.
+    """
+    frame = X[[GEO_DIM] + GEO_CHANNELS].copy()
+    frame["_y"] = np.asarray(y, dtype=float)
+
+    max_y = frame.groupby(GEO_DIM)["_y"].max()
+    max_x = frame.groupby(GEO_DIM)[GEO_CHANNELS].max()
+    k = max_x.div(max_y, axis=0).median(axis=0)
+
+    scale = pd.DataFrame(
+        np.outer(max_y.to_numpy(), k.to_numpy()),
+        index=max_y.index,
+        columns=list(k.index),
+    )
+    return xr.DataArray(
+        scale.to_numpy(),
+        dims=(GEO_DIM, "channel"),
+        coords={GEO_DIM: scale.index.tolist(), "channel": scale.columns.tolist()},
+    )
+
+
+def build_geo_model(pooled: bool = True,
+                    channel_scaling: str = "per-channel") -> MMM:
     """Construct the (unfitted) hierarchical geo MMM.
 
     `pooled=False` gives pymc-marketing's default multidimensional model -- a geo axis
@@ -202,7 +296,38 @@ def build_geo_model(pooled: bool = True) -> MMM:
     can be compared against its own absence rather than asserted to help, which is what
     `tests/test_geo_model.py::test_unpooled_model_has_no_shared_hyperparameters` and the
     Phase 5 comparison need.
+
+    `channel_scaling` selects how the channels are put on a common footing:
+
+    * `"per-channel"` -- each channel divided by its own per-geo maximum. The default
+      through Phase 5, and the setting every cached fit and documented geo number was
+      produced under. Kept as the default so the Phase 6 comparison is against the
+      measured baseline rather than against a moved one.
+    * `"target-relative"` -- `max_y[geo] * k[channel]`, which preserves the
+      cross-division media intensity contrast the default divides out. See
+      `target_relative_channel_scaling` for why that contrast is the whole of Phase 6's
+      identifying variation, and what it measures.
+
+    NOTE for anything that replays this model's graph over a cached fit
+    (`geo_attribution._built_geo_model`): the two modes produce IDENTICAL free-RV names,
+    so that function's name-based guard cannot tell them apart. A model built with the
+    wrong `channel_scaling` will recompute contributions against the wrong divisors and
+    return wrong numbers with no error raised. Pass `model=` explicitly.
     """
+    if channel_scaling not in CHANNEL_SCALING_MODES:
+        raise ValueError(
+            f"channel_scaling must be one of {CHANNEL_SCALING_MODES}, "
+            f"got {channel_scaling!r}."
+        )
+
+    if channel_scaling == "per-channel":
+        channel_scale = DataDerivedScaling(method="max", dims=())
+    else:
+        X, y = build_geo_dataframe()
+        channel_scale = FixedScaling(
+            dims=(), value=target_relative_channel_scaling(X, y)
+        )
+
     return MMM(
         date_column="date",
         channel_columns=GEO_CHANNELS,
@@ -213,12 +338,13 @@ def build_geo_model(pooled: bool = True) -> MMM:
         adstock=GeometricAdstock(l_max=GEO_ADSTOCK_L_MAX),
         saturation=InverseScaledLogisticSaturation(),
         scaling=Scaling(
-            # dims=() reduces over date only, so these are per-geo (and, for channels,
-            # per geo AND channel) maxima -- verified in tests/test_geo_model.py. That
-            # matters: divisions differ ~20x in size, and scaling them jointly would
-            # leave the smallest ones numerically invisible.
+            # dims=() reduces over date only, so the target divisor is a per-geo maximum
+            # -- verified in tests/test_geo_model.py. That matters: divisions differ ~23x
+            # in size, and scaling them jointly would leave the smallest ones numerically
+            # invisible. The CHANNEL divisor is where Phase 6 found a cost; see
+            # `channel_scaling` above and `target_relative_channel_scaling`.
             target=DataDerivedScaling(method="max", dims=()),
-            channel=DataDerivedScaling(method="max", dims=()),
+            channel=channel_scale,
         ),
         model_config=hierarchical_config() if pooled else None,
     )
@@ -271,6 +397,7 @@ def run_geo_fit(draws: int = 500, tune: int = 500, chains: int = 2,
                 target_accept: float = 0.99, random_seed: int = 42, cores: int = 1,
                 pooled: bool = True, progressbar: bool | None = None,
                 init: str = "jitter+adapt_diag", model: MMM | None = None,
+                channel_scaling: str = "per-channel",
                 **sample_kwargs) -> tuple[MMM, dict]:
     """Fit the geo model with a SHORT chain. Same caveat as the national model's
     `run_skeleton_fit`: this proves the hierarchy compiles and samples, it does not
@@ -288,7 +415,8 @@ def run_geo_fit(draws: int = 500, tune: int = 500, chains: int = 2,
     # `model` lets a caller pass a variant (a trend term, a different pooling scheme)
     # without duplicating the fit call -- Phase 5's sensitivity checks all do this.
     supplied = model is not None
-    model = build_geo_model(pooled=pooled) if model is None else model
+    model = (build_geo_model(pooled=pooled, channel_scaling=channel_scaling)
+             if model is None else model)
 
     idata = model.fit(
         X=X,
@@ -303,10 +431,17 @@ def run_geo_fit(draws: int = 500, tune: int = 500, chains: int = 2,
         init=init,
         **sample_kwargs,
     )
-    # `pooled` describes what THIS function built. A caller-supplied model may pool
-    # differently -- the decay-pooling check passes one that does -- so it is reported
-    # as unknown rather than as whatever `pooled` happened to be set to.
-    return model, {"idata": idata, "pooled": None if supplied else pooled}
+    # `pooled` and `channel_scaling` describe what THIS function built. A
+    # caller-supplied model may do either differently -- the decay-pooling check passes
+    # one that pools differently -- so they are reported as unknown rather than as
+    # whatever the arguments happened to be set to. `channel_scaling` matters especially:
+    # it leaves no trace in the free-RV names, so a fit cached without this record cannot
+    # be told apart from the other variant afterwards (see build_geo_model's note).
+    return model, {
+        "idata": idata,
+        "pooled": None if supplied else pooled,
+        "channel_scaling": None if supplied else channel_scaling,
+    }
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ from mmm_bayes.geo_model import (
     count_free_parameters,
     hierarchical_config,
     prior_predictive_summary,
+    target_relative_channel_scaling,
 )
 from mmm_bayes.loaders import GEO_CHANNELS, GEO_DIM, load_geo, load_national
 
@@ -39,6 +40,31 @@ def built_unpooled():
     model = build_geo_model(pooled=False)
     model.build_model(X=X, y=y)
     return model
+
+
+@pytest.fixture(scope="module")
+def built_target_relative():
+    X, y = build_geo_dataframe()
+    model = build_geo_model(pooled=True, channel_scaling="target-relative")
+    model.build_model(X=X, y=y)
+    return model
+
+
+def _raw_media_intensity():
+    """Media impressions per sales dollar, per division, from the raw CSV."""
+    geo = load_geo()
+    totals = geo.groupby("Division")[GEO_CHANNELS].sum().sum(axis=1)
+    return totals / geo.groupby("Division")["Sales"].sum()
+
+
+def _scaled_media_intensity(model):
+    """The same quantity as the MODEL sees it, after its own scaling is applied."""
+    ds = model.xarray_dataset
+    target, channel = ds["_target"], ds["_channel"]
+    scales = model.get_scales_as_xarray()
+    scaled_y = target / scales["target_scale"]
+    scaled_x = channel / scales["channel_scale"]
+    return (scaled_x.sum("date").sum("channel") / scaled_y.sum("date")).to_series()
 
 
 # --------------------------------------------------------------- the data claim
@@ -197,6 +223,126 @@ def test_channels_and_target_are_scaled_per_division(built_pooled):
         "divisions were expected to differ by more than 10x in size; if they no "
         "longer do, the per-geo scaling argument needs rechecking"
     )
+
+
+# ------------------------------------------- the channel scaling and what it costs
+
+
+def test_per_channel_scaling_erases_every_division_difference(built_pooled):
+    """The information loss, stated as plainly as it can be: under the default scaling
+    EVERY division's EVERY channel has a scaled maximum of exactly 1.0, so a division
+    running 50k Google impressions is indistinguishable from one running 459M."""
+    ds = built_pooled.xarray_dataset
+    scaled_max = (ds["_channel"] / built_pooled.get_scales_as_xarray()["channel_scale"]).max("date")
+    np.testing.assert_allclose(np.asarray(scaled_max), 1.0, rtol=1e-12)
+
+
+def test_target_relative_scaling_preserves_the_cross_division_contrast(
+    built_pooled, built_target_relative
+):
+    """The finding this scaling exists for. The default divides out each division's
+    media-to-sales ratio -- the contrast a geo-DiD exploits -- and does not merely
+    flatten it but INVERTS it. Guarded by sign, because the sign is the whole point."""
+    raw = _raw_media_intensity()
+    default = _scaled_media_intensity(built_pooled).reindex(raw.index)
+    relative = _scaled_media_intensity(built_target_relative).reindex(raw.index)
+
+    corr_default = np.corrcoef(raw.to_numpy(), default.to_numpy())[0, 1]
+    corr_relative = np.corrcoef(raw.to_numpy(), relative.to_numpy())[0, 1]
+
+    assert corr_default < 0, (
+        f"the default scaling was measured to invert the contrast (corr -0.457); it is "
+        f"now {corr_default:.3f}. If this has become positive the finding in "
+        f"docs/DIAGNOSTICS.md needs rechecking, not this assertion relaxing."
+    )
+    assert corr_relative > 0.8, (
+        f"target-relative scaling should carry the raw contrast through nearly intact "
+        f"(measured +0.865); got {corr_relative:.3f}"
+    )
+
+    span_default = default.max() / default.min()
+    span_relative = relative.max() / relative.min()
+    assert span_relative > 3 * span_default, (
+        f"expected the recovered span (measured 7.00x) to dwarf the default's 1.79x; "
+        f"got {span_relative:.2f}x against {span_default:.2f}x"
+    )
+
+
+def test_target_relative_scaling_shares_one_constant_across_divisions():
+    """`scale[g, c] = max_y[g] * k[c]` with k shared. If k varied by geo the
+    cross-division contrast would be divided out again, which is the bug this whole
+    scaling exists to avoid -- so it is asserted rather than assumed."""
+    X, y = build_geo_dataframe()
+    scale = target_relative_channel_scaling(X, y)
+
+    max_y = load_geo().groupby("Division")["Sales"].max()
+    k = scale / scale[GEO_DIM].to_index().map(max_y).to_numpy()[:, None]
+
+    for channel in k["channel"].values:
+        column = np.asarray(k.sel(channel=channel))
+        np.testing.assert_allclose(column, column[0], rtol=1e-12)
+
+
+def test_target_relative_scaling_matches_the_model_coord_order(built_target_relative):
+    """`FixedScaling` aligns positionally, so this array's row order IS its correctness.
+    It is right because groupby and pymc-marketing's pivot both sort divisions
+    alphabetically, and because the channel columns are selected in GEO_CHANNELS order,
+    which the pivot preserves and which is not alphabetical. Neither is a contract, so
+    both are asserted here rather than trusted."""
+    X, y = build_geo_dataframe()
+    scale = target_relative_channel_scaling(X, y)
+    applied = built_target_relative.get_scales_as_xarray()["channel_scale"]
+
+    assert [str(g) for g in scale[GEO_DIM].values] == [str(g) for g in applied[GEO_DIM].values]
+    assert [str(c) for c in scale["channel"].values] == list(GEO_CHANNELS)
+    assert [str(c) for c in applied["channel"].values] == list(GEO_CHANNELS)
+
+    # and with the order right, the applied divisors are the intended ones exactly
+    np.testing.assert_allclose(np.asarray(applied), np.asarray(scale), rtol=1e-12)
+
+
+def test_fixed_scaling_aligns_positionally_not_by_label(monkeypatch, built_target_relative):
+    """Pins the trap itself. Reversing the division order of an array that still carries
+    correct labels must change the applied divisors -- which is what makes the order
+    check above load-bearing rather than decorative. If this test ever fails because the
+    library began aligning by label, that is good news, and the docstring in
+    `target_relative_channel_scaling` and docs/CHALLENGES.md #14 should be updated
+    rather than this assertion inverted in place."""
+    import mmm_bayes.geo_model as geo_model
+
+    original = geo_model.target_relative_channel_scaling
+
+    def reversed_order(X, y):
+        scale = original(X, y)
+        return scale.isel({GEO_DIM: np.argsort(scale[GEO_DIM].values)[::-1]})
+
+    monkeypatch.setattr(geo_model, "target_relative_channel_scaling", reversed_order)
+
+    X, y = build_geo_dataframe()
+    shuffled_model = geo_model.build_geo_model(channel_scaling="target-relative")
+    shuffled_model.build_model(X=X, y=y)
+
+    applied = np.asarray(shuffled_model.get_scales_as_xarray()["channel_scale"])
+    expected = np.asarray(built_target_relative.get_scales_as_xarray()["channel_scale"])
+    assert not np.allclose(applied, expected), (
+        "FixedScaling appears to align by label now. That is a fix, not a failure -- "
+        "see docs/CHALLENGES.md #14."
+    )
+
+
+def test_both_scalings_leave_the_target_untouched(built_pooled, built_target_relative):
+    """Only the channel divisor changes. If the target scaling moved too, a difference
+    in the fitted media share could not be attributed to the channel scaling alone."""
+    np.testing.assert_allclose(
+        np.asarray(built_pooled.get_scales_as_xarray()["target_scale"]),
+        np.asarray(built_target_relative.get_scales_as_xarray()["target_scale"]),
+        rtol=1e-12,
+    )
+
+
+def test_unknown_channel_scaling_is_rejected():
+    with pytest.raises(ValueError, match="channel_scaling must be one of"):
+        build_geo_model(channel_scaling="per-geo")
 
 
 def test_adstock_window_matches_the_national_model():

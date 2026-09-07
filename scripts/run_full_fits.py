@@ -34,7 +34,7 @@ written for -- see docs/CHALLENGES.md #8.
 import argparse
 import time
 
-from mmm_bayes.config import GEO_FIT_NC, NATIONAL_FIT_NC
+from mmm_bayes.config import GEO_FIT_NC, GEO_FIT_TARGET_REL_NC, NATIONAL_FIT_NC
 from mmm_bayes.diagnostics import (
     FULL_CHAINS,
     FULL_DRAWS,
@@ -54,6 +54,15 @@ from mmm_bayes.model import run_skeleton_fit
 FITS = {
     "national": (run_skeleton_fit, {"anchored": True}, NATIONAL_FIT_NC, False),
     "geo": (run_geo_fit, {"pooled": True}, GEO_FIT_NC, True),
+    # Phase 6. Same model, same priors, same sampler settings -- the ONLY difference is
+    # the channel divisor, so a difference in the identification report is attributable
+    # to the scaling and to nothing else.
+    "geo-target-relative": (
+        run_geo_fit,
+        {"pooled": True, "channel_scaling": "target-relative"},
+        GEO_FIT_TARGET_REL_NC,
+        True,
+    ),
 }
 
 
@@ -92,7 +101,13 @@ def run_one(name: str, cores: int, target_accept: float, draws: int, tune: int) 
     print("\nworst entries by R-hat:")
     print(report.worst.round(4).to_string())
 
-    print(f"\nSaved to {save_idata(idata, path)}")
+    # `drop_derived` was unpacked from FITS and then never passed here, so every
+    # cache this script regenerated kept its per-observation deterministics: the geo
+    # fit came back at 1,113MB against the 79MB the footprint fix in commit 11b6260
+    # documented and docs/AUDIT.md still claims. Ruff does not flag an unused
+    # tuple-unpacking target, and no test regenerates a cache, so nothing caught it --
+    # the size of the file this script wrote did.
+    print(f"\nSaved to {save_idata(idata, path, drop_derived=drop_derived)}")
 
 
 if __name__ == "__main__":

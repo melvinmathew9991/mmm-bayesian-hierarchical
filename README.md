@@ -2,15 +2,18 @@
 
 **Status: Phases 1-5 complete. Phase 6 opened; 7-11 not started.** Phase 5 found the
 national model's headline quantity is not identified, and the first Phase 6 result is
-that the geo model -- the intended calibration target -- is not identified either. Read
-`docs/DIAGNOSTICS.md` before using any contribution number from this repo.
+that the geo model -- the intended calibration target -- is not identified either. The
+second Phase 6 result is that the geo model's *per-division* decomposition, which is the
+quantity a geo-DiD actually compares against, was anti-correlated with the raw data until
+the channel scaling was changed. Neither model's aggregate media share should be quoted
+without reading `docs/DIAGNOSTICS.md` first.
 See `docs/BUILD_PLAN.md`-equivalent context: this repo is the Bayesian sequel to
 [`mmm-marketing-project`](../mmm-marketing-project) -- the ridge-regression MMM
 project, checked out at `D:\mmm-marketing-project` on this machine. It was built to
 close that project's own stated gap: *"No posterior. Non-negative ridge stands in for
 a hierarchical Bayesian MMM, so there are no credible intervals on any contribution."*
 
-Repo: (not yet pushed)
+Repo: <https://github.com/melvinmathew9991/mmm-bayesian-hierarchical>
 Stack: Python 3.13, `pymc` 6.2.0, `pymc-marketing` 1.1.0, `arviz`, `pandas`/`numpy`/`scipy`, pytest
 
 ---
@@ -24,7 +27,7 @@ Stack: Python 3.13, `pymc` 6.2.0, `pymc-marketing` 1.1.0, `arviz`, `pandas`/`num
 | 3. Prior specification (anchored) | ✅ Done. Adstock decay and saturation half-point are anchored per channel to the ridge project's fitted values, with the unit conversion pinned by tests. Media coefficient deliberately left unanchored. See `docs/PRIORS.md`. |
 | 4. Hierarchical structure (geo pooling) | ✅ Done, **but not what the plan assumed** -- the geo dataset is a different business from the national one, so this is a second model, not a geo-aware version of Phases 1-3. Partial pooling across 26 divisions, with the pooling written explicitly because `dims=("geo",)` does not pool. See `docs/HIERARCHY.md`. |
 | 5. Full fit + diagnostics (R-hat, ESS, divergences at real chain length) | ✅ Done, and it is the most important phase so far. Both models sampled at 4 chains. **The national model's media/baseline split is not identified** (posterior correlation -0.997), so its media share is set by the priors, not the data. Sampler settings settled on measured evidence. See `docs/DIAGNOSTICS.md`. |
-| 6. Calibration against the ridge project's geo-DiD estimator | 🟡 Opened. The blocking prerequisite is built -- `mmm_bayes.geo_attribution` gives the panel a contribution decomposition, which it did not have. First result is bad news for the plan: **the geo model has the same identification pathology as the national one** (media 54.6%, corr -0.981), so calibrating one against the other would move the national number toward the geo model's prior rather than toward evidence. See `docs/DIAGNOSTICS.md`. |
+| 6. Calibration against the ridge project's geo-DiD estimator | 🟡 Opened, and re-scoped twice. The panel cannot calibrate the national model's media share: **both models have the same identification pathology** (national corr −0.997, geo −0.981), so calibrating one against the other transfers a prior. The narrow per-division spread was then found to be caused by the **channel scaling**, not the pooling — and it was inverted, not just flattened. Refitting under `channel_scaling="target-relative"` leaves the aggregate split exactly as unidentified (corr −0.9826) but turns the per-division decomposition from anti-correlated with raw media intensity (−0.558) into tracking it (**+0.815**). That per-division quantity, not the panel-wide share, is what a DiD compares against. See `docs/DIAGNOSTICS.md`. |
 | 7. External calibration (stretch) | ⬜ Not started. |
 | 8. ROAS + budget optimization under uncertainty | ⬜ Not started. Must run on the **national** model -- the geo panel has impressions, not dollars, so no ROAS exists there. |
 | 9. Ridge vs. Bayesian comparison | ⬜ Not started. |
@@ -108,6 +111,38 @@ Stack: Python 3.13, `pymc` 6.2.0, `pymc-marketing` 1.1.0, `arviz`, `pandas`/`num
    second claim -- the failures were described as "all non-centred offsets" and one is
    `y_sigma`. Found sideways, by an unrelated module needing to be precise about the
    same variable.
+
+15. **The cross-division variation Phase 6 needs was removed by the channel scaling,
+   not by the pooling — and it was inverted, not just flattened.** The narrow 48.7-59.0%
+   media share across divisions was first blamed on the pooling prior. Measured, the
+   pooling is innocent: `saturation_beta`'s across-geo scale sits at prior-CDF 0.07-0.46,
+   inside a prior that left room the data declined to use. The cause is
+   `DataDerivedScaling(method="max")` on the channels, which divides out each division's
+   media-to-sales ratio — the exact contrast a DiD exploits. Raw intensity spans 11.17x
+   across divisions and is near-orthogonal to division size (corr 0.155); the model sees
+   1.79x, correlated **−0.457** with the truth. Divisions C and N run ~50k Google
+   impressions against B's 459M, and per-channel scaling inflates all three to a scaled
+   maximum of exactly 1.0. Fixed by
+   `build_geo_model(channel_scaling="target-relative")`, which preserves the contrast
+   (span 7.00x, corr +0.865) while leaving the prior calibration unchanged. **Refitted,
+   it does not identify the media/baseline split** -- corr goes -0.9807 to -0.9826, and it
+   was never going to, since that degeneracy is within-series and shared by all 26
+   divisions. What it fixes is the per-division decomposition, the quantity a DiD actually
+   compares against: correlation with raw media intensity goes from **-0.558 to +0.815**.
+   The baseline model had given divisions C and N -- which run ~50k Google impressions
+   against B's 459M -- the two *highest* media shares of all 26, at 58.2% and 59.0%; they
+   are now 10.9% and 42.5%.
+
+16. **A fix was documented, verified, and not actually connected.** `run_full_fits.run_one`
+   unpacks `drop_derived` from its `FITS` table and never passes it to `save_idata`, so
+   every cache the script regenerates keeps the per-observation deterministics that
+   `docs/AUDIT.md` #8 records as removed. The regenerated geo fit came back at 1,113 MB --
+   the exact pre-fix figure. Ruff does not flag an unused tuple-unpacking target and no
+   test regenerates a cache, so nothing caught it. The audit had verified the 92.9%
+   saving on the artefact rather than by running the script that is supposed to produce
+   it, which is the same lesson finding #14 records: checking a figure is not checking the
+   path that produces it. Fixed; the re-saved cache is 1,113.5 MB -> 31.9 MB with the
+   diagnostic report identical.
 
 ## Setup
 
