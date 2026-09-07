@@ -485,3 +485,103 @@ single division, which *is* a reported parameter.
 of what that variable actually is -- and the answer was that the diagnostics had been
 treating it as something else. A defect in one module surfaced only because an unrelated
 one had to be precise about the same object.
+
+#: 13
+**Challenge:** the narrow spread of media response across divisions was blamed on the
+pooling prior, and the pooling prior had nothing to do with it.
+
+Phase 6's first pass recorded that the modelled media share spans only 48.7-59.0% across
+26 divisions and attributed it to the partial pooling shrinking media response toward a
+common value. That reads plausibly -- shrinkage is what pooling does -- and it is wrong.
+
+The pooling prior can be checked directly against the fit it produced.
+`saturation_beta`'s across-geo scale has a `HalfNormal(0.4)` prior, median 0.270. Its
+posterior medians are 0.037-0.246 across the six channels, at prior-CDF positions of
+0.07-0.46. A prior doing the shrinking would show the posterior pressed against its upper
+tail and held there; this posterior sits below the prior median with room above it that
+the data declined to use. The pooling is not the constraint. (One scale *is* pressed
+against its prior and it is the intercept's:
+`intercept_contribution_raw_sigma` at prior-CDF 0.74, posterior median 0.170 against a
+prior median of 0.101 -- the across-geo *baseline* scale is the one this fit argues is
+too tight, which is a different finding and a smaller one.)
+
+**What actually removed the variation is the channel scaling**, and it is a design
+decision made two phases earlier for a numerical reason.
+`DataDerivedScaling(method="max", dims=())` divides each channel by its own per-geo
+maximum while the target is divided by its own per-geo maximum, so each division's
+media-to-sales ratio -- how heavily it is media-supported, the exact cross-sectional
+contrast a geo-DiD exploits -- cancels before the model sees anything. What survives is
+the within-geo shape over time, which is the information the national model already has,
+replicated 26 times rather than added to.
+
+The raw panel has the contrast in abundance: media-per-sales spans 11.17x across
+divisions (CV 0.271) and is close to orthogonal to division size (corr(log sales,
+log intensity) = 0.155), which is what good identifying variation looks like. The model
+sees 1.79x -- and inverted, corr(raw, scaled) = **-0.457**. Division C has the lowest raw
+intensity and the highest scaled one.
+
+`Google_Impressions` is the case that makes it concrete. Divisions C and N run 50,708 and
+55,527 impressions against B's 458,607,393, a ~9,000x gap with no zero weeks anywhere in
+the panel, so it is real spend behaviour and not a data artefact. Dividing C's Google by
+C's own maximum inflates it to the full [0, 1] range. Under this scaling every division's
+every channel has a scaled maximum of exactly 1.0, which is the information loss written
+out in full: the model cannot distinguish a division that does not run a channel from one
+that saturates it.
+
+**Resolution:** `geo_model.target_relative_channel_scaling` scales channel `c` in
+division `g` by `max_y[g] * k[c]`, with a single `k[c] = median_g(max_t x[g,c]/max_y[g])`
+shared across divisions. Because `k` does not vary by geo the contrast passes through
+(recovered span 7.00x, corr +0.865); because the divisor stays proportional to `max_y[g]`
+the typical division's channel maximum still lands at ~1.0, so the priors calibrated in
+Phase 4 carry over unchanged -- prior predictive P(y<0) moves 4.93% to 5.16%. Selected
+with `build_geo_model(channel_scaling="target-relative")`, kept alongside the original
+rather than replacing it, because the comparison is the point.
+
+**The lesson is about where to look.** The pooling was blamed because pooling is the
+part of the model that is *about* cross-division behaviour, so it is where attention goes.
+The scaling is preprocessing -- it was chosen to stop small divisions going numerically
+invisible, it succeeded at that, and its inferential cost was never costed because
+preprocessing is not where anyone looks for an identification problem.
+
+**Outcome, refitted.** It does not identify the media/baseline split -- corr(media,
+baseline) goes -0.9807 to -0.9826 and the sum stays determined ~10x more sharply than
+either part. That is the right result rather than a disappointing one: the degeneracy is a
+within-series problem every division shares, and channel scaling governs contrast
+*between* divisions, so there was no mechanism by which it could have helped. What it
+fixes is the per-division decomposition, whose correlation with raw media intensity goes
+from **-0.558 to +0.815** -- divisions C and N, which run essentially no media, had been
+assigned the two highest media shares of all 26. Full numbers in docs/DIAGNOSTICS.md.
+
+#: 14
+**Challenge:** `FixedScaling` aligns its scale array to the data grid **positionally**,
+not by coordinate label, and gets it wrong silently.
+
+The fix in #13 supplies channel divisors as an `xarray.DataArray` with labelled `geo` and
+`channel` coordinates. `MMM._align_fixed_scale_dataarray` implements the alignment as
+`user_scale.astype(float) + xr.zeros_like(template)`, which reads exactly like a
+label-aligned xarray broadcast -- and the class docstring's own example passes a
+`DataArray` "whose dimensions broadcast to that grid".
+
+It does not behave that way. Feeding the identical array with its 26 divisions reversed
+-- labels still attached and still correct -- changes the applied divisors by up to
+1.99e7 and raises nothing. Every division is scaled by another division's maximum. The
+guards in that method check for NaNs and for a shape mismatch after broadcast, and a
+permutation trips neither: it is the right shape and it is fully populated.
+
+This was found by a test written to assert the opposite. The docstring for
+`target_relative_channel_scaling` had already claimed, in as many words, that xarray
+aligns by label "so the row order here does not have to match the pivot's". The test was
+written to pin that claim and failed.
+
+**Resolution:** the production array is correct, but by coincidence rather than
+construction -- `groupby(GEO_DIM)` sorts divisions alphabetically and the pivot does too,
+and the channel columns are selected as `GEO_CHANNELS`, the non-alphabetical order the
+pivot happens to preserve. Both coincidences are now asserted
+(`test_target_relative_scaling_matches_the_model_coord_order`), and the positional
+behaviour itself is pinned by a second test that fails loudly if the library ever starts
+aligning by label, so the workaround is retired deliberately instead of being relied on
+after it stops being necessary.
+
+**Worth stating plainly:** the first version of this scaling was correct and the reason
+given for it being correct was false. Nothing would have caught that except writing the
+test.

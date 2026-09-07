@@ -269,9 +269,108 @@ posterior is. The per-division decomposition
 
 One more observation for that comparison, and not an encouraging one: the modelled media
 share barely varies across divisions — 0.487 to 0.590 across all 26, against observed
-sales spanning 10×. The pooling has shrunk media response until the divisions look alike,
-which is exactly the cross-division variation a DiD needs in order to have something to
-detect.
+sales spanning 23×.
+
+**Phase 6 first blamed the pooling for that narrowness. That was wrong, and the real
+cause is worse.** The pooling prior is not shrinking media response: `saturation_beta`'s
+across-geo scale has a `HalfNormal(0.4)` prior with median 0.270, and its posterior
+medians land at 0.037–0.246 across the six channels, sitting at prior-CDF positions of
+0.07–0.46. A prior that was over-shrinking would show the posterior pressed against its
+upper tail; this is the opposite. The prior left room and the data declined to use it.
+(One scale *is* pressed against its prior, and it is not a media one:
+`intercept_contribution_raw_sigma` sits at prior-CDF 0.74, posterior median 0.170 against
+a prior median of 0.101. `HalfNormal(0.15)` on the across-geo baseline scale is the one
+pooling prior this fit argues is too tight.)
+
+What actually removed the variation is the **channel scaling**.
+`DataDerivedScaling(method="max", dims=())` divides every channel by its own per-geo
+maximum, so a division's media-to-sales ratio — how heavily it is media-supported, which
+is precisely the cross-sectional contrast a DiD exploits — is divided out before the
+model sees anything. The contrast is real and it is large in the raw panel:
+
+| media-per-sales across the 26 divisions | span | CV | corr with raw |
+|---|---|---|---|
+| raw | 11.17× | 0.271 | — |
+| as the model sees it, per-channel scaling | 1.79× | 0.113 | **−0.457** |
+| as the model sees it, target-relative scaling | 7.00× | — | **+0.865** |
+
+The scaling does not merely flatten the contrast, it **inverts** it: division C has the
+lowest raw media intensity (1.38) and the highest scaled one. And the raw contrast is
+close to orthogonal to division size — corr(log sales, log intensity) = 0.155 — which is
+what near-ideal identifying variation looks like before it is normalised away.
+
+The sharpest single case is `Google_Impressions`. Divisions C and N run 50,708 and 55,527
+impressions against division B's 458,607,393 — a ~9,000× gap, and genuine rather than a
+zero artefact, since no division-channel pair has a single zero week. Dividing C's Google
+by C's own maximum inflates it to the full [0, 1] range, so the fitted model cannot
+distinguish *"this division does not run Google"* from *"this division saturates it"*.
+Under the default scaling every division's every channel has a scaled maximum of exactly
+1.0, which is the information loss stated as plainly as it can be.
+
+`geo_model.target_relative_channel_scaling` is the alternative: scale channel `c` in
+division `g` by `max_y[g] · k[c]` with a single `k` shared across divisions, which passes
+the contrast through while leaving the typical division's channel maximum at ~1.0 so the
+existing prior calibration carries over unchanged (prior predictive P(y<0) moves 4.93% →
+5.16%). `build_geo_model(channel_scaling="target-relative")` builds it.
+
+### What refitting under it actually did
+
+Both fits: 4 chains × 500 draws, `target_accept=0.99`, identical priors, identical
+sampler settings. The channel divisor is the only difference, so the comparison is clean.
+
+| | per-channel (baseline) | target-relative |
+|---|---|---|
+| divergences | 0 | 0 |
+| max R-hat | 1.0166 (12 of 1,911) | 1.0181 (17 of 1,911) |
+| min bulk ESS | 422 | 370 |
+| min E-BFMI | 0.868 | 0.943 |
+| corr(media, baseline) | −0.9807 | **−0.9826** |
+| media cv ÷ sum cv | 9.33× | **10.51×** |
+| media share of panel sales | 54.6% [49.4%, 59.3%] | 50.3% [45.1%, 55.6%] |
+| per-division share | 48.7–59.0% (sd 0.022) | **10.9–56.5% (sd 0.091)** |
+
+**The aggregate media/baseline split is not identified under either scaling, and the fix
+does not move it.** The correlation goes from −0.9807 to −0.9826 — marginally worse — and
+the sum stays determined an order of magnitude more sharply than either part. Phase 6's
+original plan, calibrating the national model's split against the geo panel's *panel-wide*
+media share, remains dead for the reason recorded above: both numbers are set by their
+priors. Nothing about the scaling changes that, and it was never going to: the scaling
+governs cross-sectional contrast between divisions, while the media/baseline degeneracy
+is a within-series problem that all 26 divisions share.
+
+**What it does fix is the per-division decomposition — the quantity a geo-DiD actually
+compares against.** `geo_decompose_by_division` exists because the DiD assigns treatment
+division by division, so the panel-wide share was never the calibration target. That
+per-division quantity was not merely uninformative before; it was *backwards*:
+
+| modelled per-division media share, correlated with | per-channel | target-relative |
+|---|---|---|
+| raw media-per-sales intensity | **−0.558** | **+0.815** |
+| log raw Google impressions | −0.513 | +0.731 |
+| log raw division sales | 0.331 | 0.202 |
+
+The concrete case is the one the scaling analysis predicted. Divisions C and N run 50,708
+and 55,527 Google impressions against B's 458,607,393, and C has the lowest media
+intensity in the panel at 1.38. Under per-channel scaling the model gave those two
+divisions the **two highest media shares of all 26** — 58.2% and 59.0%. Under
+target-relative scaling they fall to 10.9% and 42.5%, and C becomes the lowest, which is
+what the raw data says it should be. Divisions in the middle of the intensity range move
+by a point or two, which is what a correction doing real work looks like rather than one
+adding noise.
+
+**Read the levels with care.** Because the media/baseline split is still unidentified,
+each division's *absolute* media share is still substantially prior-driven. What became
+trustworthy is the cross-division *pattern* — the ordering and relative spacing. A
+difference-in-differences contrast is a difference, so that is the part it needs, but any
+comparison against the DiD estimator has to be framed as pattern-against-pattern and not
+as one absolute share against another.
+
+**Phase 6's premise, restated a second time.** The panel cannot calibrate the national
+model's media share. It can now be asked whether the model's per-division media response
+agrees with an independent, placebo-validated estimator with a known MDE, applied to the
+same divisions — and before this change that question could not have been asked honestly,
+because the model's per-division answer was anti-correlated with the data it was fitted
+to.
 
 **Convergence diagnostics cannot catch any of this.** A misspecified model can be sampled
 perfectly. That is why `tests/test_attribution.py` is a separate suite from

@@ -346,9 +346,13 @@ def main() -> None:
     sales = by_division["observed_sales"]
     print(f"\nmedia share spans {spread.min():.1%} to {spread.max():.1%} across 26 "
           f"divisions whose sales span {sales.max() / sales.min():.0f}x.")
-    print("That narrowness is the pooling shrinking media response toward a common value,")
-    print("and it is the cross-division variation a geo-DiD would need in order to have")
-    print("something to detect. Phase 6 should read it as a warning, not a result.")
+    print("That narrowness is NOT the pooling: saturation_beta's across-geo scale sits")
+    print("at prior-CDF 0.07-0.46, well inside a prior that left room it did not use.")
+    print("It is the CHANNEL SCALING. Dividing each channel by its own per-geo maximum")
+    print("removes each division's media-to-sales ratio -- the cross-sectional contrast")
+    print("a geo-DiD exploits. Raw intensity spans 11.17x across divisions; scaled, the")
+    print("model sees 1.79x, and inverted (corr -0.457). See docs/DIAGNOSTICS.md and")
+    print("geo_model.target_relative_channel_scaling for the alternative.")
 
 
 if __name__ == "__main__":

@@ -60,3 +60,11 @@ RIDGE_ANCHORS_JSON = DERIVED_DATA_DIR / "ridge_anchors.json"
 FULL_FIT_DIR = DERIVED_DATA_DIR / "fits"
 NATIONAL_FIT_NC = FULL_FIT_DIR / "national_anchored.nc"
 GEO_FIT_NC = FULL_FIT_DIR / "geo_pooled.nc"
+
+# Phase 6 variant: identical model except that channels are scaled by
+# `max_y[geo] * k[channel]` instead of by their own per-geo maximum, which preserves the
+# cross-division media intensity contrast the default divides out. Cached separately
+# rather than replacing GEO_FIT_NC because the whole point is the comparison -- and
+# because the two fits have identical free-RV names, so a single overwritten cache could
+# not be told apart afterwards. See geo_model.target_relative_channel_scaling.
+GEO_FIT_TARGET_REL_NC = FULL_FIT_DIR / "geo_pooled_target_relative.nc"
