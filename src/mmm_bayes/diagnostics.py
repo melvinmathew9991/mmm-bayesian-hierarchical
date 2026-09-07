@@ -61,6 +61,14 @@ FULL_TUNE = 1000
 DERIVED_VARS = (
     "channel_contribution",
     "fourier_contribution",
+    # Added after the fact, and it moved a documented number. This list was written
+    # against the national model's variable names; the multidimensional model emits the
+    # summed-over-modes seasonality under its own name, which is (date x geo) -- 2,938
+    # per-observation entries that were being counted as model parameters. Every "of
+    # 4,849 parameter entries" figure in the docs was 61% derived array as a result, and
+    # the true denominator is 1,911. Found while building geo_attribution, which needs
+    # this term as a contribution component and so had to establish what it was.
+    "yearly_seasonality_contribution",
     "control_contribution",
     "intercept_contribution",
     "total_media_contribution_original_scale",
@@ -230,9 +238,18 @@ def save_idata(idata, path: Path, drop_derived: bool = False) -> Path:
     `drop_derived` discards the per-observation deterministics in `DERIVED_VARS` before
     writing. They dominate the file -- the geo fit's `channel_contribution` and
     `control_contribution` are (draws x 113 dates x 26 geos x channels), which is 1.1GB
-    of the 1.1GB. Nothing reads them back for that model: the diagnostics use parameters
-    only, and `mmm_bayes.attribution` refuses panel fits outright. Left off by default so
-    the national fit, whose contributions ARE the deliverable, keeps everything.
+    of the 1.1GB.
+
+    The justification used to be "nothing reads them back, because `attribution` refuses
+    panel fits". That was circular -- the refusal was the reason for the drop, and the
+    drop is what would have made lifting the refusal impossible. `mmm_bayes.geo_attribution`
+    now does read them, and the drop survives on a better argument: it recomputes them from
+    the free RVs with `pm.compute_deterministics`, exactly (verified to 5.6e-17 against the
+    national fit, which keeps its copies) and at ~2ms per draw-chain. Cheap to rebuild,
+    expensive to store, so they are not stored.
+
+    Left off by default so the national fit, whose contributions ARE the deliverable and
+    which is small enough to keep them, does exactly that.
     """
     if drop_derived:
         for name in DERIVED_VARS:

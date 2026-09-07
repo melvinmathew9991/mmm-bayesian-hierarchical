@@ -1,8 +1,9 @@
 # Bayesian Hierarchical MMM (pymc-marketing)
 
-**Status: Phases 1-5 complete. Phases 6-11 not started.** Phase 5 found the national
-model's headline quantity is not identified -- read `docs/DIAGNOSTICS.md` before using
-any contribution number from this repo.
+**Status: Phases 1-5 complete. Phase 6 opened; 7-11 not started.** Phase 5 found the
+national model's headline quantity is not identified, and the first Phase 6 result is
+that the geo model -- the intended calibration target -- is not identified either. Read
+`docs/DIAGNOSTICS.md` before using any contribution number from this repo.
 See `docs/BUILD_PLAN.md`-equivalent context: this repo is the Bayesian sequel to
 [`mmm-marketing-project`](../mmm-marketing-project) -- the ridge-regression MMM
 project, checked out at `D:\mmm-marketing-project` on this machine. It was built to
@@ -23,11 +24,11 @@ Stack: Python 3.13, `pymc` 6.2.0, `pymc-marketing` 1.1.0, `arviz`, `pandas`/`num
 | 3. Prior specification (anchored) | ✅ Done. Adstock decay and saturation half-point are anchored per channel to the ridge project's fitted values, with the unit conversion pinned by tests. Media coefficient deliberately left unanchored. See `docs/PRIORS.md`. |
 | 4. Hierarchical structure (geo pooling) | ✅ Done, **but not what the plan assumed** -- the geo dataset is a different business from the national one, so this is a second model, not a geo-aware version of Phases 1-3. Partial pooling across 26 divisions, with the pooling written explicitly because `dims=("geo",)` does not pool. See `docs/HIERARCHY.md`. |
 | 5. Full fit + diagnostics (R-hat, ESS, divergences at real chain length) | ✅ Done, and it is the most important phase so far. Both models sampled at 4 chains. **The national model's media/baseline split is not identified** (posterior correlation -0.997), so its media share is set by the priors, not the data. Sampler settings settled on measured evidence. See `docs/DIAGNOSTICS.md`. |
-| 6. Calibration against the ridge project's geo-DiD estimator | ⬜ Not started, and now **load-bearing rather than optional** -- Phase 5 showed nothing internal to the time series can separate media from baseline. Coherent for the first time too: the geo model and the DiD estimator run on the same panel. |
+| 6. Calibration against the ridge project's geo-DiD estimator | 🟡 Opened. The blocking prerequisite is built -- `mmm_bayes.geo_attribution` gives the panel a contribution decomposition, which it did not have. First result is bad news for the plan: **the geo model has the same identification pathology as the national one** (media 54.6%, corr -0.981), so calibrating one against the other would move the national number toward the geo model's prior rather than toward evidence. See `docs/DIAGNOSTICS.md`. |
 | 7. External calibration (stretch) | ⬜ Not started. |
 | 8. ROAS + budget optimization under uncertainty | ⬜ Not started. Must run on the **national** model -- the geo panel has impressions, not dollars, so no ROAS exists there. |
 | 9. Ridge vs. Bayesian comparison | ⬜ Not started. |
-| 10. Self-audit | 🟡 A mid-flight end-to-end audit of Phases 1-5 is done -- `docs/AUDIT.md`. All 24 documented figures reproduce exactly, and none of the findings invalidated a conclusion. Nine defects and gaps found, all nine fixed. The full-project self-audit this phase names is still to come. |
+| 10. Self-audit | 🟡 A mid-flight end-to-end audit of Phases 1-5 is done -- `docs/AUDIT.md`. Nine defects and gaps found, all nine fixed. **One of its "all 24 figures reproduce exactly" checks has since failed**: the geo model's parameter-entry count was 2.5x too high, found while opening Phase 6 (finding 14 below). The full-project self-audit this phase names is still to come. |
 | 11. Dashboard + docs | ⬜ Not started. |
 
 ## Real findings so far (see `docs/CHALLENGES.md` for full detail)
@@ -90,6 +91,23 @@ Stack: Python 3.13, `pymc` 6.2.0, `pymc-marketing` 1.1.0, `arviz`, `pandas`/`num
    by removing the jitter and watching it vanish. The jitter is kept anyway, because
    finding #11 shows it earns its place -- so the warning stays as a documented choice
    rather than an unsolved problem.
+13. **The geo model is not identified either, and that undermines Phase 6's premise.**
+   Asked of the panel for the first time -- it could not be asked before the panel had a
+   decomposition -- media comes to 54.6% of sales [49.4%, 59.3%] with a media/baseline
+   correlation of -0.981 and a sum determined 9.3x more sharply than either part. The
+   plan was to calibrate the national model's unidentified split against this panel;
+   both splits are set by their priors, so that calibration would transfer a prior, not
+   evidence. What survives is the DiD estimator itself, which is placebo-validated and
+   has a real MDE.
+14. **A documented figure was 61% derived array.** Every "of 4,849 parameter entries"
+   count in this project was counting `yearly_seasonality_contribution` -- 2,938
+   per-observation values -- as model parameters, because `diagnostics.DERIVED_VARS` was
+   written against the national model's variable names and the multidimensional model
+   emits that term under a different one. True count 1,911. The conclusion holds, the
+   rate does not: 12 of 1,911 over R-hat 1.01 is 0.63%, not 0.27%. It also broke a
+   second claim -- the failures were described as "all non-centred offsets" and one is
+   `y_sigma`. Found sideways, by an unrelated module needing to be precise about the
+   same variable.
 
 ## Setup
 
@@ -130,6 +148,10 @@ python scripts/run_full_fits.py geo --draws 500
 
 # 9. The deliverable: per-channel contributions with credible intervals
 python scripts/report_contributions.py
+
+# 9b. The same for the geo panel -- per-division, and with the identification report
+#     that shows why the panel-wide number should not be read on its own
+python -m mmm_bayes.geo_attribution
 
 # 10. Any of the Phase 5 open-item investigations
 python scripts/sensitivity_checks.py intercept   # also: beta-scale, vidtr, init,
@@ -190,12 +212,16 @@ it via the ridge project's own `scripts/fetch_data.py` first.
   they are printed.** `report_contributions.py` prints a health warning above them rather
   than presenting a broken decomposition quietly. The intervals are real; the location of
   the media/baseline split inside them is not.
-- The geo model clears every threshold except R-hat, and does so marginally (13 of 4,849
-  entries, worst 1.0166, all non-centred offsets) at 4 chains x 500 draws. It has not
-  been run long enough to clear R-hat on a machine that can hold a 1000-draw fit.
+- The geo model clears every threshold except R-hat, and does so marginally (12 of 1,911
+  entries, worst 1.0166, eleven non-centred offsets and one `y_sigma`) at 4 chains x 500
+  draws. It has not been run long enough to clear R-hat on a machine that can hold a
+  1000-draw fit.
 - The likelihood-noise prior is still an untouched library default. The intercept prior
   was the other one, and reviewing it in Phase 5 found a real defect.
 - Version control starts at the Phase 5 audit. Everything before it exists only as prose
   in `docs/CHALLENGES.md` -- no commit can be bisected or dated earlier than that.
-- Everything from Phase 6 onward is unbuilt. This is a working core with five real,
-  verified phases -- not a finished project.
+- The geo model's contribution numbers carry the same warning the national model's do:
+  media at 54.6% of panel sales is a symptom, not a finding. `geo_attribution` reports it
+  with the identification report next to it, the same way `report_contributions.py` does.
+- Phase 6 has a prerequisite built and a premise in doubt. Phases 7 onward are unbuilt.
+  This is a working core with five real, verified phases -- not a finished project.

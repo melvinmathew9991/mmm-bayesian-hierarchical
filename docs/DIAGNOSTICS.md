@@ -235,6 +235,44 @@ the ridge project established that *no experiment exists in the geo data* — no
 ever switches a channel off — so what Phase 6 can supply is a validated estimator and an
 MDE, not a measured lift. Phase 6 should open by confronting that.
 
+### And so does the geo model
+
+Asked of the geo panel for the first time — it could not be asked before
+`mmm_bayes.geo_attribution` existed, because the panel had no decomposition — the answer
+is the same, and it is not the answer Phase 6 wanted.
+
+| | national | geo |
+|---|---|---|
+| media share of sales | 108% | **54.6%** [49.4%, 59.3%] |
+| corr(media, baseline) | −0.997 | **−0.981** |
+| CV of media | 0.256 | 0.0485 |
+| CV of media + baseline | 0.021 | **0.0052** |
+| ratio | 12× | 9.3× |
+
+Less extreme than the national model and the same pathology: the sum is an order of
+magnitude better determined than either part, and media lands above the 50%
+implausibility threshold that `attribution` uses as a smell test. Media spend is not
+even measurable here — the geo panel has impressions, not dollars — but 55% of sales
+from six impression channels is not a number a business produces.
+
+**Phase 6's premise needs restating before Phase 6 starts.** The plan was to calibrate
+the national model's unidentified media/baseline split against the geo panel. The geo
+panel's own split is set by its priors in the same way. Calibrating one against the other
+would move the national number toward the geo model's prior, not toward evidence, and the
+result would look like external validation while being nothing of the kind.
+
+What survives is narrower and still worth doing: the DiD estimator itself is placebo-
+validated and has a real MDE, and *that* — an independent estimator with a known noise
+floor, applied to the same panel — is external to both models in a way neither model's
+posterior is. The per-division decomposition
+(`geo_attribution.geo_decompose_by_division`) is the quantity to compare against it.
+
+One more observation for that comparison, and not an encouraging one: the modelled media
+share barely varies across divisions — 0.487 to 0.590 across all 26, against observed
+sales spanning 10×. The pooling has shrunk media response until the divisions look alike,
+which is exactly the cross-division variation a DiD needs in order to have something to
+detect.
+
 **Convergence diagnostics cannot catch any of this.** A misspecified model can be sampled
 perfectly. That is why `tests/test_attribution.py` is a separate suite from
 `tests/test_diagnostics.py`: one asks whether the chains explored the posterior, the
@@ -265,13 +303,21 @@ would be a worse result, not a better one.
 
 ## Geo model: FAIL, marginally, on R-hat
 
-4 chains × **500** draws (1000 tune), `target_accept=0.99`, 4,849 parameter entries,
+4 chains × **500** draws (1000 tune), `target_accept=0.99`, 1,911 parameter entries,
 21 minutes.
+
+> **Corrected after Phase 6's opening work.** This section previously said 4,849
+> entries. It was counting `yearly_seasonality_contribution` — a (date × geo)
+> per-observation deterministic, 2,938 of those 4,849 — as model parameters, because
+> `diagnostics.DERIVED_VARS` was written against the national model's variable names and
+> the multidimensional model emits that term under a name the list did not have. The
+> conclusion below is unchanged; the failure *rate* is 6× worse than it read. See
+> `docs/CHALLENGES.md` #12.
 
 | | value | verdict |
 |---|---|---|
 | divergences | **0** | ✓ |
-| max R-hat | 1.0166 (13 of 4,849 over 1.01) | ✗ |
+| max R-hat | 1.0166 (12 of 1,911 over 1.01) | ✗ |
 | min bulk ESS | 422 | ✓ |
 | min tail ESS | 496 | ✓ |
 | min E-BFMI | 0.868 | ✓ |
@@ -280,12 +326,14 @@ would be a worse result, not a better one.
 one has one.** That is the non-centred parametrisation earning its place, exactly as
 Phase 4 predicted when it chose it.
 
-The R-hat failure is marginal and concentrated: 13 entries out of 4,849, worst 1.0166,
-and every one of them a non-centred *offset* — `gamma_fourier_offset[V, cos_2]`,
+The R-hat failure is marginal and concentrated: 12 entries out of 1,911, worst 1.0166,
+and eleven of the twelve a non-centred *offset* — `gamma_fourier_offset[V, cos_2]`,
 `saturation_beta_raw_offset[U, Organic_Views]`, and similar. Those are the `N(0, 1)`
-nuisance variables the hierarchy is built from, not quantities anyone reports. Bulk ESS
-sits at 422 against a floor of 400, which says the same thing from the other side: this
-is a draw-count limit, not a geometry problem.
+nuisance variables the hierarchy is built from, not quantities anyone reports. The
+twelfth is `y_sigma` for one division, which is a reported parameter; the earlier
+"every one of them an offset" reading was wrong on that count too. Bulk ESS sits at 422
+against a floor of 400, which says the same thing from the other side: this is a
+draw-count limit, not a geometry problem.
 
 **Why 500 draws and not 1000.** A machine constraint, stated as one rather than dressed
 up. The geo model's `channel_contribution` and `control_contribution` are

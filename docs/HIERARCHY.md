@@ -153,10 +153,17 @@ inference quality:
 | | |
 |---|---|
 | divergences | **0** |
-| max R-hat (4,849 model-parameter entries) | 1.0239 |
+| max R-hat (4,849 entries — see note) | 1.0239 |
 | entries with R-hat > 1.05 | 0 |
 | entries with R-hat > 1.01 | 64 |
 | min bulk ESS | 245 |
+
+The entry counts in this table are on the pre-correction denominator: 2,938 of those
+4,849 are `yearly_seasonality_contribution`, a per-observation deterministic that
+`diagnostics.DERIVED_VARS` failed to exclude until Phase 6's opening work. The true
+parameter count is 1,911. These particular numbers come from a short run that was never
+cached, so they are annotated rather than recomputed — `docs/DIAGNOSTICS.md` carries the
+corrected figures for the real fit. See `docs/CHALLENGES.md` #12.
 
 **Zero divergences**, across three independent 2×500 runs. Worth noting against Phase 3,
 where the *national* model — one geography, ~30 parameters — produced 2 at the same
@@ -231,8 +238,9 @@ two decays are essentially unidentified, and their posteriors are close to their
   default; the argument for it is still a priori, now known to be untestable here rather
   than merely untested.
 - ~~64 of 4,849 parameter entries above R-hat 1.01 at 2×500.~~ **Done.** At 4 chains ×
-  500 draws with `target_accept=0.99`: **0 divergences**, 13 of 4,849 entries over 1.01
-  (max 1.0166, all non-centred offsets), bulk ESS 422. Marginal, and limited by the draw
-  count this machine's memory allows rather than by geometry.
+  500 draws with `target_accept=0.99`: **0 divergences**, 12 of 1,911 entries over 1.01
+  (max 1.0166, eleven non-centred offsets and one `y_sigma`), bulk ESS 422. Marginal,
+  and limited by the draw count this machine's memory allows rather than by geometry.
+  The denominator is the corrected one; see the note above the first-fit table.
 - **Still open:** the Gaussian identity link puts 4.9% of the prior predictive on
   negative sales; `link="log"` is the structural fix. Phase 5 did not get to it.

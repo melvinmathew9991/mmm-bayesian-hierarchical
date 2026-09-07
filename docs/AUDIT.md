@@ -203,7 +203,7 @@ Not everything questionable is wrong. Three things looked like defects and are n
 * **Four `assert ... is not None` smoke assertions.** Thin, but they catch a crash in a
   sampling path where a crash is the realistic failure. Legitimate.
 * **Both models are recorded as FAIL.** The national model fails on a single divergence
-  in 4,000 draws and the geo model on 13 marginal R-hat entries out of 4,849. Both
+  in 4,000 draws and the geo model on 12 marginal R-hat entries out of 1,911. Both
   thresholds were set before any fit ran and neither has been moved. Reporting a
   near-miss as a failure is the right call and the documents do it.
 
@@ -211,8 +211,23 @@ Not everything questionable is wrong. Three things looked like defects and are n
 
 ## Open before Phase 6
 
-1. Decide whether `attribution` should support panel fits, or whether the geo model gets
-   its own decomposition module. Phase 6 calibrates the geo model, so this will come up.
+1. ~~Decide whether `attribution` should support panel fits, or whether the geo model
+   gets its own decomposition module.~~ **Decided and built: `mmm_bayes.geo_attribution`.**
+
+   Neither of the two options as posed. The split is by responsibility rather than by
+   model: *obtaining* per-draw component totals is what genuinely differs between the two
+   fits, and everything done to those totals afterwards — shares, intervals, the
+   identification report — does not differ at all, so `attribution._shares_table`,
+   `._interval` and `._identification_table` are shared and the panel module supplies
+   only the totals. `attribution` still refuses panel fits, now with a pointer instead of
+   just a refusal.
+
+   The question had a hidden prerequisite that only appeared on inspection: **the geo
+   fit does not contain the contributions to decompose.** `save_idata(drop_derived=True)`
+   discards them, and its stated reason was that nothing reads them back *because
+   attribution refuses panels* — circular, and it would have made any answer to this item
+   unimplementable against the cached fit. They are recomputed instead, which is both
+   cheaper and exact; see `docs/CHALLENGES.md` #11.
 2. The `link="log"` item from `HIERARCHY.md` remains untouched — the geo model's Gaussian
    identity link puts 4.9% of its prior predictive on impossible negative sales.
 3. The likelihood-noise prior on the national model is still an untouched library
@@ -224,7 +239,8 @@ Every check above is a short script over the cached fits and the two repos; the
 non-obvious ones are now tests:
 
 ```bash
-pytest                                   # 95 fast, includes the new guards
+pytest                                   # 106 fast (95 at audit time, + 11 for the
+                                         # panel decomposition built for Phase 6)
 pytest -m slow                           # 13, includes the ridge-refit equality check
 python scripts/report_contributions.py   # regenerates the verified figures
 ```

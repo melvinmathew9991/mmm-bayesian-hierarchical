@@ -406,3 +406,82 @@ numbers for anyone who asked. The difference is that #9's arms were *supposed* t
 so there was something to check; here there was no signal at all until someone pointed
 the function at an input it had never seen. Latent wrong answers do not surface from
 use -- only from going looking.
+
+---
+
+#: 11
+**Challenge:** the question Phase 5's audit left open -- *should `attribution` support
+panel fits, or should the geo model get its own decomposition module?* -- turned out to
+be unanswerable as posed, because **the geo fit does not contain the contributions to
+decompose.**
+
+`diagnostics.save_idata(drop_derived=True)` discards `channel_contribution` and
+`control_contribution` before writing, and its stated justification was that nothing
+reads them back *because `attribution` refuses panel fits*. That is circular: the refusal
+was the reason for the drop, and the drop would have made lifting the refusal
+unimplementable against the cached fit. Either branch of the audit's question -- extend
+the module, or write a new one -- would have hit an idata with no contributions in it.
+
+Neither of the two options was taken. **The split is by responsibility rather than by
+model.** What genuinely differs between the two fits is *obtaining* the per-draw
+component totals: one reads stored deterministics and divides by a scalar, the other
+recomputes dropped deterministics and applies a 26-entry scale vector. What happens to
+those totals afterwards -- shares, credible intervals, the identification report -- does
+not differ at all. So `attribution._shares_table`, `._interval` and
+`._identification_table` are shared, and `mmm_bayes.geo_attribution` supplies only the
+totals.
+
+**The drop stays, and is now justified non-circularly.** The contributions are recomputed
+with `pm.compute_deterministics`, replaying pymc-marketing's own graph over the cached
+free RVs rather than this repo reimplementing geometric adstock and inverse-scaled
+logistic saturation -- the version of this that would silently drift on a library
+upgrade. Every free RV needed survived the drop, so the arrays are recoverable *exactly*,
+not approximately, at ~2ms per draw-chain once compiled against 1.1GB on disk.
+
+**How that claim is checked, rather than asserted.** The geo fit has no stored
+contributions to compare against; that is the whole problem. So the mechanism is
+validated on the **national** fit, where the deterministics were kept and ground truth
+therefore exists: recomputing from cached free RVs reproduces the stored arrays to
+**5.6e-17**. The per-geo scaling is pinned the same way -- multiplying by `target_scale`
+and summing reproduces pymc-marketing's own `total_media_contribution_original_scale`
+exactly. Both are tests in `tests/test_geo_attribution.py`.
+
+**Two things the panel path gets wrong if copied from the national one.** The geo model
+carries seasonality as its own additive term rather than as Fourier columns inside
+`controls`, so a three-component decomposition misses by that term and *looks almost
+right* (it is 0.5% of sales). And `observed_data["y"]` is stored max-scaled per division,
+so the thing the components are reconciled *against* is not in dollars either -- summing
+it gives ~28 per division. The second was hit while writing this module and caught only
+by the reconciliation row, which reported 3.6e6 instead of ~1.0. Both are now tests.
+
+---
+
+#: 12
+**Challenge:** a documented headline figure was inflated 2.5x, and the cause was a list
+of variable names written against the wrong model.
+
+`diagnostics.DERIVED_VARS` names the per-observation arrays that are excluded from the
+diagnostic sweep -- they are deterministic functions of the parameters, so their R-hat
+adds nothing. The list was written against the **national** model's variable names. The
+multidimensional model emits its summed-over-modes seasonality as
+`yearly_seasonality_contribution`, a name the list did not have, while the name it *did*
+have (`fourier_contribution`) is the per-mode precursor.
+
+So 2,938 per-observation entries (113 dates x 26 divisions) were being counted as model
+parameters. **Every "of 4,849 parameter entries" figure in this project is 61% derived
+array**; the true parameter count is 1,911. It appears in `DIAGNOSTICS.md`,
+`HIERARCHY.md`, `AUDIT.md` and the README.
+
+**The conclusion does not change; the rate does.** Corrected: **12 of 1,911** entries
+over R-hat 1.01, worst 1.0166 -- still a marginal failure, still concentrated in the
+non-centred offsets. But it is 0.63% of parameters rather than 0.27%, a 6x worse failure
+rate than the documents claimed. Re-deriving it also broke a second statement: the 13
+were described as "all non-centred offsets", and they were not -- one was
+`yearly_seasonality_contribution` (now correctly excluded) and one is `y_sigma` for a
+single division, which *is* a reported parameter.
+
+**Found sideways.** Nothing was looking for this. `geo_attribution` needs
+`yearly_seasonality_contribution` as a contribution component, which forced the question
+of what that variable actually is -- and the answer was that the diagnostics had been
+treating it as something else. A defect in one module surfaced only because an unrelated
+one had to be precise about the same object.
