@@ -13,7 +13,7 @@ project, checked out at `D:\mmm-marketing-project` on this machine. It was built
 close that project's own stated gap: *"No posterior. Non-negative ridge stands in for
 a hierarchical Bayesian MMM, so there are no credible intervals on any contribution."*
 
-Repo: (not yet pushed)
+Repo: <https://github.com/melvinmathew9991/mmm-bayesian-hierarchical>
 Stack: Python 3.13, `pymc` 6.2.0, `pymc-marketing` 1.1.0, `arviz`, `pandas`/`numpy`/`scipy`, pytest
 
 ---
