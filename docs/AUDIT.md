@@ -24,7 +24,7 @@ is its own lesson about where bugs accumulate.
 
 | claim | how it was checked | result |
 |---|---|---|
-| 18 diagnostic figures in `DIAGNOSTICS.md` (both models: divergences, R-hat, ESS, E-BFMI, entry counts) | recomputed from the cached netCDF fits | **all 18 exact** |
+| 18 diagnostic figures in `DIAGNOSTICS.md` (both models: divergences, R-hat, ESS, E-BFMI, entry counts) | recomputed from the cached netCDF fits | **all 18 exact** — but see the note below on the entry counts |
 | 6 attribution figures (media share, HDI bounds, intercept share, correlation, CV) | recomputed | **all 6 exact** |
 | Phase 1: "media spend is 2.2% of revenue" | summed spend / summed sales | 2.174% ✓ |
 | Phase 1: "12.4% media-attributed" | ridge contributions from the anchor cache / total sales | 12.446% ✓ |
@@ -190,6 +190,28 @@ less than it appears to.
 the declaration is redundant rather than wrong, and moving it to the `dev` extra would
 make a fresh `pip install -e .` depend on a transitive edge staying put — the exact
 fragility finding 2 was about.
+
+---
+
+## The limit of "recomputed, and it matched"
+
+Phase 6 found one, and it is worth stating because it applies to every row above.
+
+The geo model's entry count of **4,849** was recomputed from the cached fit and matched
+exactly. It was still wrong. `diagnostics.parameter_vars` excludes the per-observation
+arrays named in `DERIVED_VARS`, that list was written against the national model's
+variable names, and the multidimensional model emits its seasonality term under a name
+the list did not have — so 2,938 per-observation values were counted as parameters. The
+true figure is 1,911, and the R-hat failure rate the documents reported was 6x too
+optimistic (see `CHALLENGES.md` #12).
+
+**Recomputing a figure verifies the figure against the code, not the code against
+reality.** Every check in the table above ran the project's own functions over the
+project's own artefacts, so any of them would reproduce a definitional error just as
+faithfully. The checks that did *not* have this weakness are the ones with an independent
+reference — Phase 1's 2.2% against summed raw columns, the CSV's MD5 against the file on
+disk, `features.build_controls` against the ridge project's own implementation. That is
+the pattern to prefer in the full-project audit Phase 10 still owes.
 
 ---
 

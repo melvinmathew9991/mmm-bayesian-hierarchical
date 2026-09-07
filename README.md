@@ -28,7 +28,7 @@ Stack: Python 3.13, `pymc` 6.2.0, `pymc-marketing` 1.1.0, `arviz`, `pandas`/`num
 | 7. External calibration (stretch) | ⬜ Not started. |
 | 8. ROAS + budget optimization under uncertainty | ⬜ Not started. Must run on the **national** model -- the geo panel has impressions, not dollars, so no ROAS exists there. |
 | 9. Ridge vs. Bayesian comparison | ⬜ Not started. |
-| 10. Self-audit | 🟡 A mid-flight end-to-end audit of Phases 1-5 is done -- `docs/AUDIT.md`. Nine defects and gaps found, all nine fixed. **One of its "all 24 figures reproduce exactly" checks has since failed**: the geo model's parameter-entry count was 2.5x too high, found while opening Phase 6 (finding 14 below). The full-project self-audit this phase names is still to come. |
+| 10. Self-audit | 🟡 A mid-flight end-to-end audit of Phases 1-5 is done -- `docs/AUDIT.md`. All 24 documented figures reproduce, nine defects and gaps found, all nine fixed. Phase 6 then found the limit of that check: the geo entry count of 4,849 *reproduced exactly* and was still wrong, because the function computing it had a name gap (finding 14 below). **Recomputing a figure verifies the figure, not the definition behind it.** The full-project self-audit this phase names is still to come. |
 | 11. Dashboard + docs | ⬜ Not started. |
 
 ## Real findings so far (see `docs/CHALLENGES.md` for full detail)

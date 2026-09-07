@@ -4,6 +4,11 @@ Phase 5 needed this to answer a question convergence diagnostics cannot: the nat
 model passes R-hat, ESS and E-BFMI, and still attributes 105% of sales to media. A
 sampler can explore a misspecified posterior perfectly well.
 
+(105% is the figure at `target_accept=0.9`, where the diagnosis in docs/DIAGNOSTICS.md
+was carried out. The final fit at 0.99 gives 107.6%, which is what
+`report_contributions.py` prints. The 105% figures quoted through this module and
+`scripts/sensitivity_checks.py` are quoted as they were measured.)
+
 Two things make this module worth having rather than inlining the arithmetic:
 
 1. **The scale.** pymc-marketing's `channel_contribution` is in max-scaled target units,
