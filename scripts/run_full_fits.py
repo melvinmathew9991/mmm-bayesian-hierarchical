@@ -18,6 +18,16 @@ recomputes deterministics in one vectorised pass, so that peak cannot be avoided
 restricting `var_names`. Four chains at 500 draws still gives 2,000 posterior draws, and
 the ESS threshold rather than the draw count is what decides whether that was enough.
 
+**The log-link variant needs 300, and the way it fails is worth knowing.** `link="log"`
+registers one more per-observation deterministic than the identity link --
+`y_original_scale`, (date x geo) per draw -- on top of everything above, which pushes the
+same peak over this machine's ceiling. At 500 draws the run **sampled all four chains
+successfully in 1,644 seconds and was then killed during the deterministic pass**, after
+the progress bar reached 100% and before anything was written. Nothing is cached on that
+path, so the entire 27 minutes is lost at the last step and there is no partial artefact
+to resume from. If a log-link fit is being started on a machine with less than a couple
+of GB free, lower `--draws` first rather than finding out at the end.
+
 THE `__main__` GUARD IS LOAD-BEARING
 ------------------------------------
 Windows has no `fork`, so pymc's parallel sampling spawns fresh interpreters that
@@ -34,7 +44,12 @@ written for -- see docs/CHALLENGES.md #8.
 import argparse
 import time
 
-from mmm_bayes.config import GEO_FIT_NC, GEO_FIT_TARGET_REL_NC, NATIONAL_FIT_NC
+from mmm_bayes.config import (
+    GEO_FIT_LOG_LINK_NC,
+    GEO_FIT_NC,
+    GEO_FIT_TARGET_REL_NC,
+    NATIONAL_FIT_NC,
+)
 from mmm_bayes.diagnostics import (
     FULL_CHAINS,
     FULL_DRAWS,
@@ -61,6 +76,15 @@ FITS = {
         run_geo_fit,
         {"pooled": True, "channel_scaling": "target-relative"},
         GEO_FIT_TARGET_REL_NC,
+        True,
+    ),
+    # The log-link variant. Held at the DEFAULT per-channel scaling on purpose: the
+    # scaling experiment and the link experiment are separate factors, and running them
+    # together would leave any difference unattributable to either.
+    "geo-log-link": (
+        run_geo_fit,
+        {"pooled": True, "link": "log"},
+        GEO_FIT_LOG_LINK_NC,
         True,
     ),
 }

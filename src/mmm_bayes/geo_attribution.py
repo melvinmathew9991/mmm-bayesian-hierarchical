@@ -112,6 +112,28 @@ def _built_geo_model(idata, model=None):
     elif model.model is None:
         raise ValueError("`model` must already be built (call model.build_model(X, y)).")
 
+    # The additive decomposition below is only meaningful under the identity link. Under
+    # `link="log"` pymc-marketing reports media as the counterfactual
+    # `exp(mu) - exp(mu - mu_media)`, and the per-component deterministics are log-space
+    # terms that do not sum to the response at all -- adding them and multiplying by
+    # `target_scale` would produce a confident wrong number, which is the failure mode
+    # this module exists to prevent (see `attribution._reject_panel_models`).
+    #
+    # The name guard below does happen to catch a link mismatch when the model is built
+    # here, because the log link drops the intercept's exp transform and so renames
+    # `intercept_contribution_raw_*` to `intercept_contribution_*`. It does NOT catch a
+    # caller passing a matched log-link model and idata together, which is the case this
+    # check is for.
+    if str(getattr(model, "link", "identity")) != "identity":
+        raise ValueError(
+            f"geo_attribution decomposes additively and this model uses "
+            f"link={model.link!r}. Under a log link the components are "
+            "log-space terms and media is a counterfactual "
+            "(exp(mu) - exp(mu - mu_media)), so summing them is meaningless. Use the "
+            "library's own `total_media_contribution_original_scale` and "
+            "`y_original_scale` deterministics instead -- see docs/HIERARCHY.md."
+        )
+
     missing = {rv.name for rv in model.model.free_RVs} - set(_dataset(idata, "posterior").data_vars)
     if missing:
         raise ValueError(
