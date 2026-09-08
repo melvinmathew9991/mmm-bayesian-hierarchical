@@ -520,7 +520,7 @@ made the `vidtr` result decisive in the other direction.
 | `Google_Impressions` decay pinned at 0.979 | HIERARCHY.md | **done** — not a trend; a level-competition symptom |
 | complete pooling of decay, argued not tested | HIERARCHY.md | **done** — inconclusive; the data is silent |
 | geo model at real chain length | this phase | **done** — 0 divergences, marginal R-hat |
-| Gaussian identity link, 4.9% negative prior mass | HIERARCHY.md | **not addressed** — see below |
+| Gaussian identity link, 4.9% negative prior mass | HIERARCHY.md | **not addressed in Phase 5** — done in Phase 6, see below |
 
 ## What Phase 5 did not do
 
@@ -529,6 +529,14 @@ puts 4.9% of its prior predictive on impossible negative sales — is still open
 in scope and did not get done, and it is a model-form change rather than a diagnostic, so
 it belongs with whichever phase next revisits the geo specification. Recorded here as
 skipped rather than quietly dropped from the list.
+
+**Picked up in Phase 6, and the outcome is split.** `build_geo_model(link="log")` makes
+the impossible mass exactly zero and improves the prior predictive's calibration besides.
+The fit it produces does not converge — 486 of 1,885 parameter entries over R-hat 1.01
+against this phase's 12 — because the link turns a non-identification that was benign
+under the identity link into a malignant one. Left not-converged rather than fixed with a
+tighter prior. `docs/CHALLENGES.md` #15 and `HIERARCHY.md`. Nothing in *this* document's
+numbers changes: they are all identity-link, which remains the default.
 
 ## Reproducing this
 
