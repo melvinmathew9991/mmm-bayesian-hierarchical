@@ -170,6 +170,97 @@ def hierarchical_config(
     }
 
 
+def log_hierarchical_config(
+    intercept_location: float = -1.70,
+    beta_location: float = -3.5,
+    half_point_median: float = 0.3,
+) -> dict[str, Prior]:
+    """The same pooling structure re-specified for `link="log"`.
+
+    NOT a variant of `hierarchical_config` with two numbers changed. Under
+    `link="log"` pymc-marketing puts a `LogNormal` likelihood on the target and
+    `median(y) = exp(mu) * target_scale`, so **the entire linear predictor moves to log
+    space** and every prior in `hierarchical_config` changes meaning. Two of them break
+    outright, which is why this is a separate function rather than a flag:
+
+    * **The intercept prior becomes unsatisfiable.** `hierarchical_config` builds it with
+      `transform="exp"`, so it is strictly positive -- correct under the identity link,
+      where the intercept is a share of the division's peak week and a negative baseline
+      is nonsense. In log space the required value is `log(0.19) ~ -1.7`, and a strictly
+      positive intercept cannot reach it at all: the smallest baseline it can express is
+      `exp(0) = 1.0`, i.e. every week at or above the division's own maximum. Measured by
+      OLS on `log(max-scaled sales)` per division: mean **-1.705**, across-geo sd 0.071.
+      So the exp transform is dropped and the location moved.
+
+      Worth stating, because it is the point of the whole change: the transform existed
+      only to keep baseline sales positive, and under a LogNormal likelihood positivity
+      is guaranteed by construction. The structural fix makes the workaround obsolete
+      rather than merely relocating it.
+
+    * **The holiday-week prior is ~5x too tight.** Those dummies carry the Q4 spike, and
+      in log space that spike is a *multiplier*, not an offset. The same OLS gives
+      coefficients up to **1.704** (`peak_wk48` averages 1.432 across divisions) against
+      `hierarchical_config`'s `Normal(0, 0.18)`. A prior that puts the true value 9 sd
+      out is not a weak prior, it is a wrong one.
+
+    The rest follow the same measurement:
+
+    * seasonality -- log-space Fourier coefficients reach 0.161 with an across-geo sd up
+      to 0.060, an order of magnitude more cross-division variation than the identity
+      link's ~0.01, so the pooling here is looser than Phase 4's;
+    * likelihood scale -- residual log sd after the deterministic part is **0.197**, so
+      `HalfNormal(0.25)` on the across-geo scale brackets it; `hierarchical_config`'s
+      `HalfNormal(0.04)` describes additive noise on max-scaled sales and means nothing
+      here;
+    * `saturation_beta` keeps its location. That is arithmetic, not laziness: to produce
+      a media share `s` the six channels must supply a total log-lift of `log(1/(1-s))`,
+      so `s` between 3% and 61% wants per-channel values of roughly 0.006 to 0.156 --
+      which is exactly the range `exp(Normal(-3.5, 1.0))` already spans. The prior is
+      left uncommitted about the media share for the same reason it was under the
+      identity link.
+    * `saturation_lam` and `adstock_alpha` are untouched, because both live in
+      *channel* units and the link changes the response scale only.
+    """
+    return {
+        # Log-space baseline. No `transform="exp"`: the value must be negative, and
+        # positivity of sales now comes from the LogNormal likelihood instead.
+        "intercept": Prior(
+            "Normal",
+            mu=Prior("Normal", mu=intercept_location, sigma=0.3),
+            sigma=Prior("HalfNormal", sigma=0.15),
+            dims=GEO_DIM,
+            centered=False,
+        ),
+        "saturation_beta": _hierarchical_positive(beta_location, 1.0, 0.4),
+        "saturation_lam": _hierarchical_positive(np.log(half_point_median), 0.7, 0.4),
+        "adstock_alpha": Prior("Beta", alpha=1, beta=3, dims="channel"),
+        # Wider than the identity-link version on both levels: 0.161 observed against a
+        # 0.15 prior sd is snug, and the across-geo spread is 0.060 rather than ~0.01.
+        "gamma_fourier": Prior(
+            "Normal",
+            mu=Prior("Normal", mu=0, sigma=0.25, dims="fourier_mode"),
+            sigma=Prior("HalfNormal", sigma=0.10, dims="fourier_mode"),
+            dims=(GEO_DIM, "fourier_mode"),
+            centered=False,
+        ),
+        # The Q4 multiplier. Left free to take either sign, matching the identity-link
+        # treatment: a lift-shaped prior on a control is a stronger claim than this model
+        # needs to make, even when the lift is known to be large.
+        "gamma_control": Prior(
+            "Normal",
+            mu=Prior("Normal", mu=0, sigma=1.0, dims="control"),
+            sigma=Prior("HalfNormal", sigma=0.30, dims="control"),
+            dims=(GEO_DIM, "control"),
+            centered=False,
+        ),
+        "likelihood": Prior(
+            "LogNormal",
+            sigma=Prior("HalfNormal", sigma=Prior("HalfNormal", sigma=0.25), dims=GEO_DIM),
+            dims=("date", GEO_DIM),
+        ),
+    }
+
+
 def _hierarchical_positive(location: float, location_sigma: float,
                            scale_sigma: float, group: str = "channel") -> Prior:
     """Non-centred hierarchical prior for a strictly positive per-(geo, channel)
@@ -288,7 +379,8 @@ def target_relative_channel_scaling(X: pd.DataFrame, y: pd.Series) -> xr.DataArr
 
 
 def build_geo_model(pooled: bool = True,
-                    channel_scaling: str = "per-channel") -> MMM:
+                    channel_scaling: str = "per-channel",
+                    link: str = "identity") -> MMM:
     """Construct the (unfitted) hierarchical geo MMM.
 
     `pooled=False` gives pymc-marketing's default multidimensional model -- a geo axis
@@ -308,12 +400,27 @@ def build_geo_model(pooled: bool = True,
       `target_relative_channel_scaling` for why that contrast is the whole of Phase 6's
       identifying variation, and what it measures.
 
+    `link` selects the functional form. `"identity"` is the additive Gaussian model of
+    Phases 4-6. `"log"` gives pymc-marketing's multiplicative model -- a `LogNormal`
+    likelihood with `median(y) = exp(mu) * target_scale` -- which is the structural fix
+    for the 4.9% of identity-link prior predictive mass that falls on impossible negative
+    sales (docs/HIERARCHY.md's long-standing open item). It selects
+    `log_hierarchical_config`, because the log link re-specifies the priors rather than
+    reinterpreting them; see that function.
+
+    Under `link="log"` the decomposition is COUNTERFACTUAL, not additive: the library
+    reports media as `exp(mu) - exp(mu - mu_media)`, so summing the per-component
+    deterministics the way `geo_attribution` does for the identity link is meaningless.
+    `geo_attribution` refuses log-link fits for that reason.
+
     NOTE for anything that replays this model's graph over a cached fit
-    (`geo_attribution._built_geo_model`): the two modes produce IDENTICAL free-RV names,
-    so that function's name-based guard cannot tell them apart. A model built with the
-    wrong `channel_scaling` will recompute contributions against the wrong divisors and
-    return wrong numbers with no error raised. Pass `model=` explicitly.
+    (`geo_attribution._built_geo_model`): the `channel_scaling` modes produce IDENTICAL
+    free-RV names, so that function's name-based guard cannot tell them apart. A model
+    built with the wrong `channel_scaling` will recompute contributions against the wrong
+    divisors and return wrong numbers with no error raised. Pass `model=` explicitly.
     """
+    if link not in ("identity", "log"):
+        raise ValueError(f"link must be 'identity' or 'log', got {link!r}.")
     if channel_scaling not in CHANNEL_SCALING_MODES:
         raise ValueError(
             f"channel_scaling must be one of {CHANNEL_SCALING_MODES}, "
@@ -346,7 +453,11 @@ def build_geo_model(pooled: bool = True,
             target=DataDerivedScaling(method="max", dims=()),
             channel=channel_scale,
         ),
-        model_config=hierarchical_config() if pooled else None,
+        model_config=(
+            (log_hierarchical_config() if link == "log" else hierarchical_config())
+            if pooled else None
+        ),
+        link=link,
     )
 
 
@@ -397,7 +508,7 @@ def run_geo_fit(draws: int = 500, tune: int = 500, chains: int = 2,
                 target_accept: float = 0.99, random_seed: int = 42, cores: int = 1,
                 pooled: bool = True, progressbar: bool | None = None,
                 init: str = "jitter+adapt_diag", model: MMM | None = None,
-                channel_scaling: str = "per-channel",
+                channel_scaling: str = "per-channel", link: str = "identity",
                 **sample_kwargs) -> tuple[MMM, dict]:
     """Fit the geo model with a SHORT chain. Same caveat as the national model's
     `run_skeleton_fit`: this proves the hierarchy compiles and samples, it does not
@@ -415,7 +526,7 @@ def run_geo_fit(draws: int = 500, tune: int = 500, chains: int = 2,
     # `model` lets a caller pass a variant (a trend term, a different pooling scheme)
     # without duplicating the fit call -- Phase 5's sensitivity checks all do this.
     supplied = model is not None
-    model = (build_geo_model(pooled=pooled, channel_scaling=channel_scaling)
+    model = (build_geo_model(pooled=pooled, channel_scaling=channel_scaling, link=link)
              if model is None else model)
 
     idata = model.fit(
@@ -441,6 +552,7 @@ def run_geo_fit(draws: int = 500, tune: int = 500, chains: int = 2,
         "idata": idata,
         "pooled": None if supplied else pooled,
         "channel_scaling": None if supplied else channel_scaling,
+        "link": None if supplied else link,
     }
 
 

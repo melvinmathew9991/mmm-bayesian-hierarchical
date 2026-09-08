@@ -68,3 +68,10 @@ GEO_FIT_NC = FULL_FIT_DIR / "geo_pooled.nc"
 # because the two fits have identical free-RV names, so a single overwritten cache could
 # not be told apart afterwards. See geo_model.target_relative_channel_scaling.
 GEO_FIT_TARGET_REL_NC = FULL_FIT_DIR / "geo_pooled_target_relative.nc"
+
+# The log-link variant: a LogNormal likelihood and a multiplicative functional form,
+# which is the structural fix for the 4.9% of identity-link prior predictive mass that
+# falls on negative sales. Kept separate again -- its priors are re-specified rather than
+# reinterpreted (geo_model.log_hierarchical_config), so it is a third model rather than a
+# setting of the other two.
+GEO_FIT_LOG_LINK_NC = FULL_FIT_DIR / "geo_pooled_log_link.nc"

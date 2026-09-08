@@ -72,6 +72,12 @@ DERIVED_VARS = (
     "control_contribution",
     "intercept_contribution",
     "total_media_contribution_original_scale",
+    # Registered only under `link="log"`, and (date x geo) per draw. Added here BEFORE
+    # ever fitting that model, because finding #14 was exactly this: a per-observation
+    # deterministic missing from this list is silently counted as a model parameter and
+    # inflates every "of N parameter entries" figure in the docs. The log link introduces
+    # a new name, so it needs a new entry.
+    "y_original_scale",
     "mu",
     "y",
 )

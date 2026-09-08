@@ -17,6 +17,7 @@ from mmm_bayes.geo_model import (
     build_geo_model,
     count_free_parameters,
     hierarchical_config,
+    log_hierarchical_config,
     prior_predictive_summary,
     target_relative_channel_scaling,
 )
@@ -38,6 +39,14 @@ def built_pooled():
 def built_unpooled():
     X, y = build_geo_dataframe()
     model = build_geo_model(pooled=False)
+    model.build_model(X=X, y=y)
+    return model
+
+
+@pytest.fixture(scope="module")
+def built_log_link():
+    X, y = build_geo_dataframe()
+    model = build_geo_model(pooled=True, link="log")
     model.build_model(X=X, y=y)
     return model
 
@@ -343,6 +352,97 @@ def test_both_scalings_leave_the_target_untouched(built_pooled, built_target_rel
 def test_unknown_channel_scaling_is_rejected():
     with pytest.raises(ValueError, match="channel_scaling must be one of"):
         build_geo_model(channel_scaling="per-geo")
+
+
+# ------------------------------------------------- the log link (functional form)
+
+
+def test_log_link_puts_no_prior_mass_on_negative_sales(built_log_link):
+    """The open item this variant exists for. The identity link leaves 4.9% of the prior
+    predictive below zero and no prior tuning removes it -- an additive Gaussian with
+    symmetric seasonality priors always will. Under a LogNormal likelihood it is exactly
+    zero by construction, not merely small."""
+    summary = prior_predictive_summary(built_log_link)
+    assert summary.loc["P(y<0)", "prior_predictive"] == 0.0
+
+
+def test_log_link_prior_predictive_still_brackets_observed_sales(built_log_link):
+    """Zero impossible mass is worthless if the prior stops describing the data. The
+    identity link bought its 4.9% by centring the baseline high -- a predictive median
+    2.4x the observed one. The log link should not need that trade."""
+    summary = prior_predictive_summary(built_log_link)
+    predicted, observed = summary["prior_predictive"], summary["observed"]
+    assert predicted["q25"] < observed["q50"] < predicted["q95"]
+    assert predicted["q50"] < 2 * observed["q50"], (
+        "the log-link predictive median should sit far closer to the observed one than "
+        "the identity link's 2.4x; if it does not, the intercept location is wrong"
+    )
+
+
+def test_log_link_intercept_is_not_exponentiated_and_is_negative():
+    """The structural incompatibility, and the reason this is a separate config rather
+    than a flag. In log space the baseline must be near log(0.19) = -1.7. The
+    identity-link prior is `transform="exp"` and strictly positive, so the smallest
+    baseline it can express is exp(0) = 1.0 -- every week at or above the division's own
+    peak. It cannot reach the right region at all."""
+    identity = hierarchical_config()["intercept"]
+    log_space = log_hierarchical_config()["intercept"]
+
+    assert getattr(identity, "transform", None) == "exp"
+    assert getattr(log_space, "transform", None) is None
+    assert log_space.parameters["mu"].parameters["mu"] < 0
+
+
+def test_log_link_control_prior_covers_the_measured_q4_multiplier():
+    """In log space the holiday dummies carry a multiplier, not an offset. Measured by
+    OLS on log(max-scaled sales), those coefficients reach 1.70. The identity-link prior
+    sd of 0.18 would put that 9 sd out, which is a wrong prior rather than a weak one."""
+    identity_sd = hierarchical_config()["gamma_control"].parameters["mu"].parameters["sigma"]
+    log_sd = log_hierarchical_config()["gamma_control"].parameters["mu"].parameters["sigma"]
+
+    assert identity_sd < 0.25
+    assert log_sd >= 1.0, "must comfortably cover the observed 1.70 log-space lift"
+
+
+def test_log_link_uses_a_lognormal_likelihood(built_log_link):
+    """pymc-marketing rejects any other likelihood under link='log', because the
+    counterfactual decomposition is only correct for that one."""
+    assert log_hierarchical_config()["likelihood"].distribution == "LogNormal"
+    assert built_log_link.link == "log"
+
+
+def test_log_link_registers_y_original_scale_and_it_is_excluded_from_diagnostics(
+    built_log_link,
+):
+    """Finding #14 was a per-observation deterministic missing from DERIVED_VARS being
+    counted as a model parameter, which inflated every documented entry count. The log
+    link introduces a new one, so the guard is asserted rather than assumed."""
+    from mmm_bayes.diagnostics import DERIVED_VARS
+
+    names = {v.name for v in built_log_link.model.deterministics}
+    assert "y_original_scale" in names
+    assert "y_original_scale" in DERIVED_VARS
+
+
+def test_identity_link_is_unchanged_by_the_log_link_addition(built_pooled):
+    """Regression guard: the default must still be the additive Gaussian model every
+    cached fit and documented number was produced under."""
+    assert built_pooled.link == "identity"
+    assert "y_original_scale" not in {v.name for v in built_pooled.model.deterministics}
+
+
+def test_unknown_link_is_rejected():
+    with pytest.raises(ValueError, match="link must be"):
+        build_geo_model(link="logit")
+
+
+def test_geo_attribution_refuses_log_link_fits(built_log_link):
+    """The additive decomposition is meaningless under a multiplicative model, and a
+    silent wrong number is the failure mode this module was built to prevent."""
+    from mmm_bayes.geo_attribution import _built_geo_model
+
+    with pytest.raises(ValueError, match="decomposes additively"):
+        _built_geo_model(idata=None, model=built_log_link)
 
 
 def test_adstock_window_matches_the_national_model():

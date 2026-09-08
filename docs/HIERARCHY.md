@@ -142,8 +142,48 @@ better-centred prior with 8%+.
 **The residual 4.9% is structural, not a tuning failure.** An additive Gaussian model
 with an identity link and symmetric seasonality priors will always put some mass below
 zero. `MMM(link="log")` is the structural fix and would make it exactly zero. It is not
-adopted here because it changes the model's functional form — a Phase 5 decision, on a
-real chain length, not a Phase 4 prior adjustment. Recorded as an open item.
+adopted *here* because it changes the model's functional form — a Phase 5 decision, on a
+real chain length, not a Phase 4 prior adjustment.
+
+**Built in Phase 6 as `build_geo_model(link="log")`.** It does exactly what this section
+predicted: prior predictive `P(y < 0) = 0.0000`, by construction rather than by tuning.
+It also removes the trade this section had to make. The identity-link intercept was
+centred at 0.30 rather than the observed 0.246 specifically to halve the impossible mass,
+at the documented cost of *"a predictive median 2.4x the observed one"*. Under the log
+link no such purchase is needed — predictive median 0.213 against an observed 0.190, 12%
+high rather than 135%.
+
+The change is larger than a flag, which is why it is `log_hierarchical_config` and not an
+argument to `hierarchical_config`. Under `link="log"` pymc-marketing uses a `LogNormal`
+likelihood with `median(y) = exp(mu) · target_scale`, so the whole linear predictor moves
+to log space and every prior above changes meaning. Two break outright:
+
+| prior | identity link | what log space needs |
+|---|---|---|
+| intercept | `transform="exp"`, strictly positive, centred at `log(0.30)` | **−1.705** (OLS on `log` max-scaled sales), across-geo sd 0.071, **and it must be able to go negative** |
+| holiday weeks | `Normal(0, 0.18)` | coefficients reach **1.704** (`peak_wk48` averages 1.432) |
+| seasonality | `Normal(0, 0.15)`, across-geo `HalfNormal(0.05)` | \|max\| 0.161, across-geo sd up to 0.060 |
+| likelihood scale | `HalfNormal(HalfNormal(0.04))` on max-scaled sales | residual log sd **0.197** |
+
+The intercept is the one that could not have been left alone. A strictly positive
+log-space intercept has `exp(0) = 1.0` as its *smallest* expressible baseline — every
+week at or above that division's own peak — so it cannot reach `−1.7` at all. And the
+reason it was exp-transformed in the first place was to keep baseline sales positive,
+which under a LogNormal likelihood is guaranteed. The structural fix makes the workaround
+obsolete rather than relocating it; that is the clearest single argument for the log link
+in this model.
+
+`saturation_beta` keeps its location, by arithmetic rather than by inertia: producing a
+media share `s` needs a total log-lift of `log(1/(1−s))` across six channels, so `s`
+between 3% and 61% wants per-channel values of roughly 0.006–0.156 — the range
+`exp(Normal(−3.5, 1.0))` already spans. `saturation_lam` and `adstock_alpha` are
+untouched because both live in *channel* units, which the link does not touch.
+
+**Two cautions.** pymc-marketing 1.1.0 warns that `link="log"` is *"experimental and
+under active development… API and behavior may change in future releases without
+deprecation warnings"*. And the decomposition stops being additive: media is reported as
+the counterfactual `exp(mu) − exp(mu − mu_media)`, so `geo_attribution`'s additive sum is
+meaningless under this link and now refuses it explicitly.
 
 ## What the first fit showed
 
@@ -242,5 +282,48 @@ two decays are essentially unidentified, and their posteriors are close to their
   (max 1.0166, eleven non-centred offsets and one `y_sigma`), bulk ESS 422. Marginal,
   and limited by the draw count this machine's memory allows rather than by geometry.
   The denominator is the corrected one; see the note above the first-fit table.
-- **Still open:** the Gaussian identity link puts 4.9% of the prior predictive on
-  negative sales; `link="log"` is the structural fix. Phase 5 did not get to it.
+- ~~The Gaussian identity link puts 4.9% of the prior predictive on negative sales;
+  `link="log"` is the structural fix.~~ **Done, in Phase 6.**
+  `build_geo_model(link="log")` gives `P(y < 0) = 0.0000` and a better-calibrated prior
+  predictive besides (median 12% above observed, against the identity link's 135%). It
+  needed a re-specified prior set rather than a flag — see the section above — and it
+  makes the exp-transformed intercept, which existed only to keep baselines positive,
+  unnecessary. The library flags the link itself as experimental.
+  **The fit it produces does not converge** — 486 of 1,885 entries over R-hat 1.01
+  against the identity link's 12, for reasons that are not the shorter chain. See
+  "What the log-link fit showed" below and `docs/CHALLENGES.md` #15. The structural
+  fix to the prior and a sampleable posterior turned out to trade against each other.
+
+## What the log-link fit showed
+
+4 chains × 300 draws (1,000 tune), `target_accept=0.99`, `cores=1` — 28.2 minutes.
+Draws are 300 rather than 500 because the log link registers one more per-observation
+deterministic (`y_original_scale`) and 500 exceeded this machine's memory *after*
+sampling finished; see `scripts/run_full_fits.py`.
+
+**It does not pass.** 486 of 1,885 parameter entries above R-hat 1.01, 75 above 1.05,
+max 1.1189, min bulk ESS 36 — against the identity link's 12, 0, 1.0166 and 421. Zero
+divergences and min E-BFMI 0.888 in both. The gap is not the shorter chain: median bulk
+ESS falls further than 1.67x fewer draws accounts for, and the worst parameter is 85x
+worse per draw. The mechanism — a non-identification that was benign under the identity
+link and is not under this one — is `docs/CHALLENGES.md` #15.
+
+**The across-geo scales are the part of this fit that can be read**, and they reproduce
+the Phase 4 result under a different functional form:
+
+| scale | identity | log | |
+|---|---|---|---|
+| `gamma_fourier_sigma` | 0.0020 | 0.0147 | seasonality still near-completely pooled |
+| `gamma_control_sigma` | 0.0116 | 0.0239 | holiday response too |
+| `saturation_beta_raw_sigma` | 0.1815 | 0.1711 | **media response still genuinely differs** |
+| `saturation_lam_raw_sigma` | 0.1919 | 0.1896 | so do half-points |
+| `intercept_contribution_sigma` | 0.1702 | 0.0779 | not comparable — the log link drops the exp transform the identity version is scaled by |
+
+The two media scales move by less than 6% across a change of functional form, and the
+order-of-magnitude gap between seasonal and media pooling survives. **These divisions
+share a calendar but not a media response** was the substantive finding of Phase 4, and
+it is now known not to be an artefact of the additive link. That is the one inference
+this fit adds, and it happens to be the one that does not depend on the parameters that
+mixed badly.
+
+Nothing resting on the channel-level parameters themselves should be read off this fit.
