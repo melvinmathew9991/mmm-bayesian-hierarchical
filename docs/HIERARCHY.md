@@ -289,3 +289,41 @@ two decays are essentially unidentified, and their posteriors are close to their
   needed a re-specified prior set rather than a flag — see the section above — and it
   makes the exp-transformed intercept, which existed only to keep baselines positive,
   unnecessary. The library flags the link itself as experimental.
+  **The fit it produces does not converge** — 486 of 1,885 entries over R-hat 1.01
+  against the identity link's 12, for reasons that are not the shorter chain. See
+  "What the log-link fit showed" below and `docs/CHALLENGES.md` #15. The structural
+  fix to the prior and a sampleable posterior turned out to trade against each other.
+
+## What the log-link fit showed
+
+4 chains × 300 draws (1,000 tune), `target_accept=0.99`, `cores=1` — 28.2 minutes.
+Draws are 300 rather than 500 because the log link registers one more per-observation
+deterministic (`y_original_scale`) and 500 exceeded this machine's memory *after*
+sampling finished; see `scripts/run_full_fits.py`.
+
+**It does not pass.** 486 of 1,885 parameter entries above R-hat 1.01, 75 above 1.05,
+max 1.1189, min bulk ESS 36 — against the identity link's 12, 0, 1.0166 and 421. Zero
+divergences and min E-BFMI 0.888 in both. The gap is not the shorter chain: median bulk
+ESS falls further than 1.67x fewer draws accounts for, and the worst parameter is 85x
+worse per draw. The mechanism — a non-identification that was benign under the identity
+link and is not under this one — is `docs/CHALLENGES.md` #15.
+
+**The across-geo scales are the part of this fit that can be read**, and they reproduce
+the Phase 4 result under a different functional form:
+
+| scale | identity | log | |
+|---|---|---|---|
+| `gamma_fourier_sigma` | 0.0020 | 0.0147 | seasonality still near-completely pooled |
+| `gamma_control_sigma` | 0.0116 | 0.0239 | holiday response too |
+| `saturation_beta_raw_sigma` | 0.1815 | 0.1711 | **media response still genuinely differs** |
+| `saturation_lam_raw_sigma` | 0.1919 | 0.1896 | so do half-points |
+| `intercept_contribution_sigma` | 0.1702 | 0.0779 | not comparable — the log link drops the exp transform the identity version is scaled by |
+
+The two media scales move by less than 6% across a change of functional form, and the
+order-of-magnitude gap between seasonal and media pooling survives. **These divisions
+share a calendar but not a media response** was the substantive finding of Phase 4, and
+it is now known not to be an artefact of the additive link. That is the one inference
+this fit adds, and it happens to be the one that does not depend on the parameters that
+mixed badly.
+
+Nothing resting on the channel-level parameters themselves should be read off this fit.

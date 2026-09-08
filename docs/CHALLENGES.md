@@ -585,3 +585,79 @@ after it stops being necessary.
 **Worth stating plainly:** the first version of this scaling was correct and the reason
 given for it being correct was false. Nothing would have caught that except writing the
 test.
+
+#: 15
+**Challenge:** the log link fixed the impossible prior predictive mass and made the
+posterior harder to sample, because it turned a *benign* non-identification into a
+malignant one.
+
+`link="log"` did what #14's section of docs/HIERARCHY.md predicted of it: prior
+predictive `P(y < 0) = 0.0000` by construction, and a better-calibrated predictive
+besides. Then it failed its convergence gate. On identical criteria -- parameter entries
+only, `DERIVED_VARS` excluded from both:
+
+| | identity, 4x500 | log, 4x300 |
+|---|---|---|
+| entries | 1,911 | 1,885 |
+| R-hat > 1.01 | 12 | **486** |
+| R-hat > 1.05 | 0 | **75** |
+| max R-hat | 1.0166 | **1.1189** |
+| min bulk ESS | 421 | **36** |
+| median bulk ESS | 2,910 | 970 |
+| divergences | 0 | **0** |
+| min E-BFMI | -- | 0.888 |
+
+**It is not the draw count.** The log fit has 1.67x fewer draws, which explains the
+median (2,910 scaled down is ~1,750 against 970 observed -- typical parameters mix about
+1.8x worse per draw). It does not explain the tail. The single worst parameter is 85x
+worse per draw, and 75 entries above 1.05 do not appear from shortening a chain that
+previously produced zero.
+
+**Zero divergences and E-BFMI 0.888 say this is not the usual pathology.** No funnel, no
+heavy tail in the energy. What it looks like instead is a flat ridge, and
+`adstock_alpha[Affiliate_Impressions]` shows the mechanism in isolation:
+
+| | identity | log |
+|---|---|---|
+| `adstock_alpha[Affiliate]` | 0.301 +/- 0.242, R-hat 1.00, ESS 3,238 | 0.5 +/- 0.37, R-hat 1.12, ESS 38 |
+| `saturation_beta[., Affiliate]` | 0.009 +/- 0.008, R-hat 1.00 | 0.08 +/- 0.13, R-hat 1.10-1.12 |
+
+(The two `saturation_beta` rows are in different units -- an increment on max-scaled
+sales against a log-lift -- so read the ratios, not the levels.)
+
+Under the identity link Affiliate's response was pinned tightly near zero. Its decay was
+therefore *formally* unidentified -- a decay on a channel with no effect has nothing to
+act on -- but harmlessly so: `alpha` simply reverted to its `Beta(1, 3)` prior (posterior
+0.301 +/- 0.242 against a prior 0.25 +/- 0.194) and sampling a prior is easy, hence ESS
+3,238. Under the log link the response is no longer pinned, so the likelihood now *touches*
+`alpha` without identifying it, and all four chains wander the same flat interval
+(q05 ~0.02 to q95 ~0.98 in every one). Not multimodality -- chains agreeing on a ridge and
+disagreeing about where on it they are.
+
+**The correction worth recording.** The first reading of this was "the failure is one
+channel", taken from the eight worst entries, all of which are Affiliate. Counted
+properly only 109 of the 486 are: the rest are `gamma_fourier` (103), `saturation_beta`
+(196 with its raw offsets), `saturation_lam` (124). The degradation is broad and Affiliate
+is merely its worst point. A ranked list of worst offenders is exactly the view that
+cannot distinguish "concentrated" from "has a maximum", and it was read as if it could.
+
+**Resolution: none applied, deliberately.** The obvious fix is a tighter `adstock_alpha`
+prior on the channel that mixes worst -- which would buy the R-hat with a prior, on the
+one channel whose effect the data identifies least, and report convergence that the
+sampler had been told to reach rather than found. More draws is ruled out by the per-draw
+figures above. The fit is kept and marked not-converged.
+
+**What this costs, and does not.** The across-geo scales -- the substantive Phase 4
+result -- survive the link and are the part of the fit worth reading: `saturation_beta`
+0.1815 to 0.1711 and `saturation_lam` 0.1919 to 0.1896, essentially unmoved, while
+seasonality stays an order of magnitude tighter than media response (`gamma_fourier`
+0.0020 to 0.0147). That the headline finding reproduces under a different functional form
+is a robustness result the identity fit alone could not provide. What cannot be read off
+this fit is anything resting on the poorly-mixed channel-level parameters themselves.
+(`intercept_contribution_sigma` moves 0.1702 to 0.0779, but the identity version is
+scaled by an exp transform this link drops, so the two are not comparable.)
+
+**The honest summary is that the two goals turned out to trade against each other.** The
+link was adopted to make the model's support correct and it does. It also moved the model
+onto a posterior this machine cannot sample to standard in 28 minutes. Both are true, and
+the first does not retroactively justify reporting the second as a success.
